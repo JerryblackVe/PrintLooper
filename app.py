@@ -1,53 +1,84 @@
 import streamlit as st
-from core.gcode_loop import process_3mf, DEFAULT_CHANGE_TEMPLATE
+from core.gcode_loop import rebuild_cycles, DEFAULT_CHANGE_TEMPLATE
+from core.queue_builder import read_3mf, compose_sequence, build_final_3mf
 
-st.set_page_config(page_title="3MF Loop + Plate Changer", page_icon="🛠️", layout="centered")
-st.title("3MF Loop + Plate Changer (Bambu / G-code)")
+st.set_page_config(page_title="3MF Queue + Plate Changer", page_icon="🛠️", layout="wide")
+st.title("3MF Queue + Plate Changer")
 
 with st.sidebar:
-    st.markdown("### Parámetros")
-    repeats = st.number_input("Repeticiones totales", min_value=1, value=2, step=1)
+    st.markdown("### Parámetros globales")
     cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=4, step=1)
     down_mm = st.number_input("Descenso Z (mm)", min_value=1.0, value=20.0, step=0.5, format="%.1f")
     up_mm   = st.number_input("Ascenso Z (mm)",   min_value=1.0, value=75.0, step=0.5, format="%.1f")
-    use_existing_tpl = st.checkbox("Usar PRIMERA sección 'change plates' existente (si hay)", value=True)
-    sim_only = st.checkbox("Simulación (no escribir, sólo reporte)", value=False)
+    mode    = st.radio("Modo de cola", options=["serial", "interleaved"], format_func=lambda x: "Serie" if x=="serial" else "Intercalado")
+    use_tpl = st.checkbox("Usar plantilla custom", value=True)
+    st.caption("Insertamos cambio de placa entre cada segmento.")
 
-st.markdown("Subí un **.3mf**, define las **repeticiones** y la app insertará bloques de **cambio de placa** entre cada repetición, dejando el **apagado** sólo al final.")
+with st.expander("Plantilla de 'change plates'"):
+    tpl = st.text_area("Plantilla {{CYCLES}}", value=DEFAULT_CHANGE_TEMPLATE, height=220)
 
-with st.expander("Plantilla de 'change plates' (opcional)"):
-    st.caption("Usá {{CYCLES}} para inyectar los ciclos Z. Si no hay sección existente o desmarcás la casilla, se usará esta plantilla.")
-    user_template = st.text_area("Plantilla", value=DEFAULT_CHANGE_TEMPLATE, height=260)
+uploads = st.file_uploader("Subí uno o más .3mf", type=["3mf"], accept_multiple_files=True)
+if not uploads:
+    st.stop()
 
-uploaded = st.file_uploader("Archivo .3mf", type=["3mf"])
-
-if uploaded:
-    st.info(f"Archivo: **{uploaded.name}** — {uploaded.size/1024:.1f} KB")
-    run = st.button("Procesar 3MF")
-    if run:
-        if repeats < 1 or down_mm <= 0 or up_mm <= 0:
-            st.error("Parámetros inválidos: revisá repeticiones y mm de Z.")
+# Leer archivos y thumbnails
+models = []
+cols = st.columns(len(uploads)) if uploads else []
+for i, up in enumerate(uploads):
+    data = up.read()
+    meta = read_3mf(data)
+    # miniaturas (si hay)
+    with cols[i]:
+        st.markdown(f"**{up.name}**")
+        thumbs = meta["thumbs"]
+        if thumbs:
+            # mostrar la primera
+            z = zipfile.ZipFile(io.BytesIO(data), "r")
+            st.image(z.read(thumbs[0]))
+            z.close()
         else:
-            data = uploaded.read()
-            with st.spinner("Procesando…"):
-                try:
-                    out_bytes, modified, report = process_3mf(
-                        data, int(repeats), int(cycles), float(down_mm), float(up_mm),
-                        user_template, use_existing_tpl
-                    )
-                except Exception as e:
-                    st.error(f"Error: {e}")
-                else:
-                    st.success(f"OK. GCODEs modificados: {modified}.")
-                    st.code("\n".join(report[-30:]) or "(sin novedades)", language="text")
-                    if not sim_only:
-                        st.download_button(
-                            label="Descargar 3MF modificado",
-                            data=out_bytes,
-                            file_name=f"modified_{uploaded.name}",
-                            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
-                        )
-                    else:
-                        st.info("Modo simulación: no se ofrece descarga.")
-else:
-    st.caption("Subí un archivo para habilitar el procesamiento.")
+            st.info("Sin thumbnail en 3MF.")
+    # parámetros por modelo
+    order = st.number_input(f"Orden — {up.name}", min_value=1, value=i+1, step=1, key=f"order_{i}")
+    reps  = st.number_input(f"Repeticiones — {up.name}", min_value=1, value=1, step=1, key=f"reps_{i}")
+    models.append({
+        "name": up.name,
+        "raw": data,
+        "order": int(order),
+        "repeats": int(reps),
+        "plate_name": meta["plate_name"],  # para esqueleto
+        "core": meta["core"],
+        "shutdown": meta["shutdown"],
+        "files": meta["files"]
+    })
+
+# Ordenar según 'order'
+models.sort(key=lambda m: m["order"])
+
+# Construir bloque de cambio
+cycle_block = rebuild_cycles(cycles, down_mm, up_mm, None, None)
+change_block = (tpl if use_tpl else DEFAULT_CHANGE_TEMPLATE).replace("{{CYCLES}}", cycle_block)
+
+if st.button("Generar 3MF compuesto"):
+    try:
+        # Secuencia (lista con nombre, core, shutdown, repeats)
+        seq_items = [{"name": m["name"], "core": m["core"], "shutdown": m["shutdown"], "repeats": m["repeats"]} for m in models]
+        composite_gcode = compose_sequence(seq_items, change_block, mode)
+        # Usar el primer archivo como esqueleto
+        base = models[0]
+        final_3mf = build_final_3mf(base["files"], base["plate_name"], composite_gcode)
+        st.success("Cola compuesta generada.")
+        st.download_button(
+            "Descargar 3MF compuesto",
+            data=final_3mf,
+            file_name=f"queue_{models[0]['name'].rsplit('.',1)[0]}.3mf",
+            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
+        )
+        # Log de vista previa
+        st.code(
+            f"Modo: {mode}\n" +
+            "\n".join([f"- {m['name']}: x{m['repeats']}" for m in models]),
+            language="text"
+        )
+    except Exception as e:
+        st.error(f"Error: {e}")
