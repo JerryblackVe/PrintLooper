@@ -1,8 +1,8 @@
+# .streamlit/config.toml
 [theme]
 base="dark"
-primaryColor="#8AE234"
-backgroundColor="#0F1115"
-secondaryBackgroundColor="#161A22"
+primaryColor="#8AE234"      # verde del logo
+backgroundColor="#0E1117"   # fondo app
+secondaryBackgroundColor="#141821"  # paneles / sidebar
 textColor="#E6E6E6"
-font="mono"
-
+font="sans serif"
