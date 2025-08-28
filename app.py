@@ -3,13 +3,12 @@ import streamlit as st
 from core.gcode_loop import rebuild_cycles, DEFAULT_CHANGE_TEMPLATE
 from core.queue_builder import read_3mf, compose_sequence, build_final_3mf
 
-# ===== Nombre cool + logo =====
 APP_NAME = "PrintLooper — Auto Swap for 3MF"
 LOGO_PATH = "assets/PrintLooper.png"
 
 st.set_page_config(page_title=APP_NAME, page_icon="🖨️", layout="wide")
 
-# ===== CSS personalizado =====
+# ===== CSS =====
 CUSTOM_CSS = """
 <style>
 .main .block-container {max-width: 1200px; padding-top: 1.2rem;}
@@ -28,7 +27,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 c1, c2 = st.columns([0.12, 0.88], vertical_alignment="center")
 with c1:
     try:
-        st.image(LOGO_PATH, use_column_width=True)
+        st.image(LOGO_PATH, use_container_width=True)  # corregido
     except Exception:
         st.write("🖨️")
 with c2:
@@ -38,7 +37,7 @@ with c2:
 # ===== Sidebar =====
 with st.sidebar:
     st.markdown("### Parámetros globales")
-    cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=5, step=1)  # 👈 default = 5
+    cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=5, step=1)  # default 5
     down_mm = st.number_input("Descenso Z (mm)", min_value=1.0, value=20.0, step=0.5, format="%.1f")
     up_mm   = st.number_input("Ascenso Z (mm)",   min_value=1.0, value=75.0, step=0.5, format="%.1f")
     mode    = st.radio("Orden de impresión", ["serial","interleaved"],
@@ -52,7 +51,7 @@ uploads = st.file_uploader("Subí uno o más .3mf", type=["3mf"], accept_multipl
 if not uploads:
     st.stop()
 
-# ===== Manejo de modelos =====
+# ===== Modelos =====
 models = []
 cols = st.columns(len(uploads))
 for i, up in enumerate(uploads):
@@ -64,11 +63,11 @@ for i, up in enumerate(uploads):
         st.markdown(f"**{up.name}**")
         if meta["thumbs"]:
             z = zipfile.ZipFile(io.BytesIO(data), "r")
-            st.image(z.read(meta["thumbs"][0]), use_column_width=True)
+            st.image(z.read(meta["thumbs"][0]), use_container_width=True)  # corregido
             z.close()
         else:
-            st.image("https://via.placeholder.com/320x200?text=3MF", use_column_width=True)
-        reps = st.number_input(f"Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
+            st.image("https://via.placeholder.com/320x200?text=3MF", use_container_width=True)  # corregido
+        reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
         st.markdown('</div>', unsafe_allow_html=True)
 
     models.append({
@@ -81,7 +80,7 @@ for i, up in enumerate(uploads):
         "files": meta["files"],
     })
 
-# ===== Generación del bloque =====
+# ===== Cambio de placa =====
 cycle_block = rebuild_cycles(cycles, down_mm, up_mm, None, None)
 change_block = (tpl if use_tpl else DEFAULT_CHANGE_TEMPLATE).replace("{{CYCLES}}", cycle_block)
 
