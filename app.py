@@ -75,23 +75,32 @@ with c1:
     except Exception: st.write("🖨️")
 with c2:
     st.markdown("## PrintLooper")
-    st.caption("Duplica y encadena placas con cambios automáticos para tu granja de impresión.")
+    st.caption("Duplica y encadena placas con cambios automáticos para tu granja de impresión (MOD Bambu Lab A1 — cambio de cama PEI).")
 
 # ========= Sidebar =========
 with st.sidebar:
     st.markdown("### Parámetros globales")
     cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=5, step=1)
+    st.caption("❓ Número de pares de movimientos Z (bajar/subir) que ejecuta el ciclo de expulsión.")
+
     down_mm = st.number_input("Descenso Z (mm)", min_value=1.0, value=20.0, step=0.5, format="%.1f")
+    st.caption("❓ Cuánto baja el eje Z durante el ciclo de expulsión.")
+
     up_mm   = st.number_input("Ascenso Z (mm)",   min_value=1.0, value=75.0, step=0.5, format="%.1f")
+    st.caption("❓ Cuánto sube el eje Z para despejar la pieza y evitar colisiones.")
+
     mode    = st.radio("Orden de impresión", ["serial","interleaved"],
                        format_func=lambda x: "Serie" if x=="serial" else "Intercalado")
+    st.caption("❓ Serie = termina todas las repeticiones de un modelo y pasa al siguiente. Intercalado = alterna entre modelos por turno.")
+
     use_tpl = st.checkbox("Usar plantilla custom", value=True)
+    st.caption("❓ Si está activo, se usa la plantilla editable de cambio de placa. Si no, se utilizará la plantilla por defecto.")
 
     st.markdown("---")
     st.markdown("### Espera antes del cambio de placa")
     wait_enabled = st.checkbox("Activar espera", value=False)
+    st.caption("❓ Si se activa, la impresora esperará antes de iniciar el cambio de placa (por tiempo o temperatura).")
 
-    # (Corrección) Siempre mostramos el selector y habilitamos/deshabilitamos según el checkbox
     wait_mode = st.radio(
         "Modo de espera",
         ["time", "temp"],
@@ -99,24 +108,31 @@ with st.sidebar:
         horizontal=True,
         disabled=not wait_enabled
     )
+    st.caption("❓ Elige si la espera será por una cantidad fija de minutos o hasta que la cama alcance una temperatura objetivo (M190 R).")
 
     wait_minutes = st.number_input(
         "Minutos de espera",
         min_value=0.0, value=2.0, step=0.5, format="%.1f",
         disabled=(not wait_enabled or wait_mode!="time")
     )
+    if wait_mode == "time":
+        st.caption("❓ Duración de la pausa antes del cambio. La cama se apaga (M140 S0) y se espera G4 S<segundos>.")
 
     target_bed = st.number_input(
         "Temperatura objetivo de cama (°C)",
         min_value=0, max_value=120, value=35, step=1,
         disabled=(not wait_enabled or wait_mode!="temp")
     )
+    if wait_mode == "temp":
+        st.caption("❓ Temperatura a la que debe enfriar la cama antes del cambio. Se usa M140 S0 + M190 R<temp>.")
 
 with st.expander("Plantilla de 'change plates'"):
     tpl = st.text_area("Plantilla {{CYCLES}}", value=DEFAULT_CHANGE_TEMPLATE, height=220)
+    st.caption("❓ Podés usar {{CYCLES}} como marcador donde quieras inyectar los ciclos Z. Si no lo usás, se insertan tras la segunda línea.")
 
 # ========= Uploads (normales) =========
 uploads = st.file_uploader("Subí uno o más .3mf", type=["3mf"], accept_multiple_files=True)
+st.caption("❓ Podés subir varios .3mf. A cada uno le podrás asignar cuántas repeticiones querés.")
 
 # ========= Tarjetas por modelo =========
 models = []
@@ -133,6 +149,7 @@ if uploads:
             st.image(preview if preview else "https://via.placeholder.com/320x200?text=No+preview",
                      use_container_width=True)
             reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
+            st.caption("❓ Cantidad de veces que se imprimirá este modelo dentro de la cola.")
             st.markdown('</div>', unsafe_allow_html=True)
         models.append({
             "name": up.name, "raw": data, "repeats": int(reps),
@@ -164,6 +181,7 @@ change_block_final = pre_wait_block + change_block
 
 # ========= Generar 3MF compuesto (modo normal) =========
 if uploads and st.button("Generar 3MF compuesto"):
+    st.caption("❓ Construye un único .3mf con todos los modelos y sus repeticiones, insertando el bloque de cambio entre cada impresión.")
     try:
         seq_items = [{"name": m["name"], "core": m["core"], "shutdown": m["shutdown"], "repeats": m["repeats"]}
                      for m in models]
@@ -178,7 +196,6 @@ if uploads and st.button("Generar 3MF compuesto"):
             file_name=f"queue_{models[0]['name'].rsplit('.',1)[0]}.3mf",
             mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
         )
-
     except Exception as e:
         st.error(f"Error: {e}")
 
@@ -205,9 +222,13 @@ def build_test_shutdown() -> str:
 with st.sidebar:
     st.markdown("---")
     st.markdown("### Modo prueba (solo movimientos)")
+    st.caption("❓ Genera un .3mf que solo hace movimientos (sin extrusión) para validar tiempos y la rutina de cambio.")
     test_repeats = st.number_input("Repeticiones de prueba", min_value=1, value=3, step=1)
+    st.caption("❓ Cuántas veces repetir el bucle de prueba.")
     test_safety_z = st.number_input("Altura segura Z (mm)", min_value=1.0, value=10.0, step=1.0, format="%.1f")
+    st.caption("❓ Altura a la que se mueve Z para evitar colisiones.")
     test_xy_speed = st.number_input("Velocidad XY (mm/min)", min_value=100, value=6000, step=100)
+    st.caption("❓ Velocidad de los movimientos XY del test.")
 
 st.markdown("---")
 if st.button("🧪 Generar 3MF de prueba (solo movimientos)"):
@@ -234,6 +255,5 @@ if st.button("🧪 Generar 3MF de prueba (solo movimientos)"):
             file_name="printlooper_test_moves.3mf",
             mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
         )
-
     except Exception as e:
         st.error(f"Error: {e}")
