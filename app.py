@@ -20,9 +20,10 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
   border-radius: 14px; padding: 0.6rem 1.1rem; font-weight: 700; }
 .card { border:1px solid #2a2f3a; border-radius:16px; padding:12px; background:#141821; }
 .small { opacity:.85; font-size:.9rem; }
-.row { display:flex; gap:12px; align-items:center; }
-.dot { width:14px; height:14px; border-radius:50%; display:inline-block; border:1px solid #00000033; }
-.kpi { font-weight:600; }
+.kpi { font-weight:600; margin-top:.35rem; margin-bottom:.35rem; }
+.slots { display:flex; gap:18px; align-items:flex-start; }
+.slot  { width:95px; text-align:center; }
+.dot   { width:18px; height:18px; border-radius:50%; display:inline-block; border:1px solid #00000033; }
 .footer { opacity:.7; font-size:.85rem; padding-top:1.2rem; border-top:1px dashed #2a2f3a; }
 </style>
 """, unsafe_allow_html=True)
@@ -44,43 +45,39 @@ def apply_temp_overrides(gcode_text: str, hotend: float|None, bed: float|None) -
         m = patt.search(text)
         if not m: return None
         s,e = m.span()
-        return text[:s] + re.sub(r"S\d+(\.\d+)?", newS, text[s:e]) + text[e:]
+        return text[:s] + re.sub(r"S\\d+(\\.\\d+)?", newS, text[s:e]) + text[e:]
     if hotend is not None:
         r = repl_first(HOTEND_RE, f"S{int(hotend)}")
-        text = r if r is not None else f"; PrintLooper override\nM104 S{int(hotend)}\n{text}"
+        text = r if r is not None else f"; PrintLooper override\\nM104 S{int(hotend)}\\n{text}"
     if bed is not None:
         r = repl_first(BED_RE, f"S{int(bed)}")
-        text = r if r is not None else f"; PrintLooper override\nM140 S{int(bed)}\n{text}"
+        text = r if r is not None else f"; PrintLooper override\\nM140 S{int(bed)}\\n{text}"
     return text
 
-def parse_time(text:str) -> str|None:
-    t = text or ""
-    # ;TIME:2624   (segundos)
-    m = re.search(r"^\s*;TIME:(\d+)\s*$", t, re.MULTILINE)
+def parse_time(full_gcode:str) -> str|None:
+    t = full_gcode or ""
+    m = re.search(r"^\\s*;TIME:(\\d+)\\s*$", t, re.MULTILINE)  # Orca/Prusa
     if m:
         sec = int(m.group(1)); h=sec//3600; mnt=(sec%3600)//60; s=sec%60
         return f"{h}h {mnt:02d}m {s:02d}s" if h else f"{mnt}m {s:02d}s"
-    # ; estimated printing time (normal mode) = 0h 43m 44s
-    m = re.search(r"estimated printing time.*?=\s*([0-9hms :]+)", t, re.IGNORECASE)
-    if m:
-        return m.group(1).strip().replace("  "," ")
+    m = re.search(r"estimated printing time.*?=\\s*([0-9hms :]+)", t, re.IGNORECASE)
+    if m: return m.group(1).strip().replace("  "," ")
     return None
 
-def parse_filament_usage(text:str):
+def parse_filament_usage(full_gcode:str):
     """
-    Devuelve lista por slot: [{'g':..,'m':..,'color':'#xxxxxx'}].
-    Soporta Orca/Bambu:
+    Lee stats desde el G-code COMPLETO (cabecera):
       ; filament used [g] = 25.59, 9.58, 9.41
       ; filament used [m] = 8.44, 3.16, 3.11
-      ; filament_color = #000000;#FFFFFF;#FFFF00   (a veces 'colour' y separadores , ;)
+      ; filament_color = #000000;#FFFFFF;#FFFF00  (o 'colour', separadores ',' o ';')
     """
-    t = text or ""
-    nums_g = re.search(r"filament used\s*\[\s*g\s*\]\s*=\s*([0-9.,;\s]+)", t, re.IGNORECASE)
-    nums_m = re.search(r"filament used\s*\[\s*m\s*\]\s*=\s*([0-9.,;\s]+)", t, re.IGNORECASE)
-    colors = re.search(r"filament[_ ]colou?r\s*=\s*([#0-9a-fA-F;\s,]+)", t, re.IGNORECASE)
+    t = full_gcode or ""
+    nums_g = re.search(r"filament\\s+used\\s*\\[\\s*g\\s*\\]\\s*=\\s*([0-9.,;\\s]+)", t, re.IGNORECASE)
+    nums_m = re.search(r"filament\\s+used\\s*\\[\\s*m\\s*\\]\\s*=\\s*([0-9.,;\\s]+)", t, re.IGNORECASE)
+    colors = re.search(r"filament[_ ]colou?r\\s*=\\s*([#0-9a-fA-F;\\s,]+)", t, re.IGNORECASE)
 
-    gs = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", nums_g.group(1))] if nums_g else []
-    ms = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", nums_m.group(1))] if nums_m else []
+    gs = [float(x.replace(',', '.')) for x in re.findall(r"[0-9]+(?:[\\.,][0-9]+)?", nums_g.group(1))] if nums_g else []
+    ms = [float(x.replace(',', '.')) for x in re.findall(r"[0-9]+(?:[\\.,][0-9]+)?", nums_m.group(1))] if nums_m else []
     cs = []
     if colors:
         cs = [c.strip() for c in re.split(r"[;,]", colors.group(1)) if c.strip()]
@@ -108,20 +105,21 @@ def select_preview_from_files(files: dict, plate_name: str) -> bytes|None:
             return files[ok]
     return None
 
-def color_row(slots:list[dict]):
-    if not slots: return
-    rows = []
+def slots_grid(slots:list[dict]):
+    if not slots: 
+        st.markdown("<div class='small'>Sin info de filamento.</div>", unsafe_allow_html=True)
+        return
+    html = ["<div class='slots'>"]
     for idx, s in enumerate(slots, start=1):
         g = "-" if s.get("g") is None else f"{s['g']:.2f} g"
         m = "-" if s.get("m") is None else f"{s['m']:.2f} m"
         c = s.get("color","#999999")
-        rows.append(
-            f"<div class='row'><span class='dot' style='background:{c}'></span>"
-            f"<span class='small'>Slot {idx}</span>"
-            f"<span class='small' style='margin-left:6px'>PLA</span>"
-            f"<span class='small' style='margin-left:auto'>{g}<br>{m}</span></div>"
+        html.append(
+            f"<div class='slot'><span class='dot' style='background:{c}'></span>"
+            f"<div class='small'>Slot {idx}<br>PLA<br>{g}<br>{m}</div></div>"
         )
-    st.markdown("<br>".join(rows), unsafe_allow_html=True)
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 # ===== Header =====
 c1, c2 = st.columns([0.22, 0.78])
@@ -156,10 +154,12 @@ for i, up in enumerate(uploads):
     data = up.read()
     meta = read_3mf(data)  # {files, plate_name, core, shutdown}
 
-    core_txt = meta["core"]
-    hot, bed = extract_first_temp(core_txt)
-    est_time = parse_time(core_txt) or "—"
-    slots = parse_filament_usage(core_txt)
+    # *** USAR EL G-CODE COMPLETO para stats (no 'core') ***
+    full_gcode = (meta["files"].get(meta["plate_name"], b"")).decode("utf-8", errors="ignore")
+
+    hot, bed = extract_first_temp(full_gcode)
+    est_time = parse_time(full_gcode) or "—"
+    slots    = parse_filament_usage(full_gcode)
 
     with cols[i]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -169,16 +169,12 @@ for i, up in enumerate(uploads):
         if preview: st.image(preview, use_container_width=True)
         else:       st.image("https://via.placeholder.com/320x200?text=No+preview", use_container_width=True)
 
-        # Tiempo
-        st.markdown(f"<div class='small kpi'>{est_time}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi'>{est_time}</div>", unsafe_allow_html=True)
 
-        # Repeticiones (input compacto)
         reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
 
-        # Filamentos por slot
-        color_row(slots)
+        slots_grid(slots)
 
-        # Temps detectadas + overrides opcionales
         st.markdown(
             f"<div class='small'>Hotend: <b>{'-' if hot is None else int(hot)}°C</b> — "
             f"Cama: <b>{'-' if bed is None else int(bed)}°C</b></div>",
@@ -199,7 +195,8 @@ for i, up in enumerate(uploads):
         "raw": data,
         "repeats": int(reps),
         "plate_name": meta["plate_name"],
-        "core": core_txt,
+        "core": meta["core"],              # para componer
+        "full": full_gcode,                # stats/temps/colores
         "shutdown": meta["shutdown"],
         "files": meta["files"],
         "override_hot": new_hot if mod_temps else None,
@@ -212,11 +209,12 @@ change_block = (tpl if use_tpl else DEFAULT_CHANGE_TEMPLATE).replace("{{CYCLES}}
 
 if st.button("Generar 3MF compuesto"):
     try:
-        # Aplicar overrides antes de componer
+        # Aplicar overrides antes de componer (sobre 'core')
         seq_items = []
         for m in models:
             core = m["core"]
             if m["override_hot"] is not None or m["override_bed"] is not None:
+                # aplicar también al core (no a full)
                 core = apply_temp_overrides(core, m["override_hot"], m["override_bed"])
             seq_items.append({"name": m["name"], "core": core, "shutdown": m["shutdown"], "repeats": m["repeats"]})
 
@@ -234,13 +232,13 @@ if st.button("Generar 3MF compuesto"):
             mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
         )
 
-        # Log breve
+        # Log
         lines = [f"Orden: {'Serie' if mode=='serial' else 'Intercalado'}"]
         for m in models:
             oh = "-" if m["override_hot"] is None else m["override_hot"]
             ob = "-" if m["override_bed"] is None else m["override_bed"]
             lines.append(f"- {m['name']}: x{m['repeats']} | hotend={oh} | cama={ob}")
-        st.code("\n".join(lines), language="text")
+        st.code("\\n".join(lines), language="text")
 
         st.markdown('<div class="footer">Hecho con ❤️ por PrintLooper</div>', unsafe_allow_html=True)
 
