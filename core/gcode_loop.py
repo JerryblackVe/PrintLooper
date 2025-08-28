@@ -1,6 +1,6 @@
 import io, re, zipfile, hashlib
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 SECTION_RE = re.compile(
     r"(;=+\s*Starting\s+to\s+change\s+plates[^\n]*\n)(.*?)(;=+\s*Finish\s+to\s+change\s+plates[^\n]*\n)",
@@ -60,10 +60,6 @@ def _extract_F(line: Optional[str], default=" F1200") -> str:
     return f" F{m.group(1)}" if m else default
 
 def find_cycles(lines: List[str]) -> Tuple[Optional[int], Optional[int], List[Tuple[float,float]]]:
-    """
-    Tolera comentarios/vacíos entre down/up (hasta 1 línea intermedia).
-    Devuelve (start_index, end_index_exclusive, [(down, up), ...]).
-    """
     i = 0
     n = len(lines)
     while i < n:
@@ -76,7 +72,6 @@ def find_cycles(lines: List[str]) -> Tuple[Optional[int], Optional[int], List[Tu
         m_down = ZDOWN_RE.match(lines[i])
         if not m_down:
             break
-        # permitir una línea intermedia (comentario/vacía)
         j = i + 1
         if j < n and (lines[j].strip().startswith(";") or lines[j].strip() == ""):
             j += 1
@@ -147,88 +142,13 @@ def build_change_block_from_template(cycles:int, down_mm:float, up_mm:float, tem
     inject_at = min(2, len(parts))
     return "".join(parts[:inject_at]) + cycle_lines + "\n" + "".join(parts[inject_at:])
 
-def split_core_and_shutdown(text:str) -> Tuple[str,str]:
-    # priorizar ;END_OF_PRINT si existe
+def split_core_and_shutdown(text:str):
     m_end = list(END_OF_PRINT_RE.finditer(text))
     if m_end:
         idx = m_end[-1].start()
         return text[:idx], text[idx:]
-
     m = list(SHUTDOWN_RE.finditer(text))
     if not m:
         return text, ""
     idx = m[-1].start()
     return text[:idx], text[idx:]
-
-def duplicate_with_change_blocks(gcode_text:str, repeats:int, change_block:str, report:list) -> str:
-    core, shutdown = split_core_and_shutdown(gcode_text)
-    if repeats <= 1:
-        return core + shutdown
-    parts = [core]
-    for _ in range(repeats - 1):
-        parts += ["\n", change_block, "\n", core]
-    parts.append(shutdown)
-    report.append(f"Duplicación: {repeats} repeticiones; bloque insertado {repeats-1} veces.")
-    return "".join(parts)
-
-def process_one_gcode(gcode_bytes:bytes, repeats:int, cycles:int, down_mm:float, up_mm:float,
-                      user_tpl:str, use_existing_tpl:bool, report:list) -> bytes:
-    text = gcode_bytes.decode("utf-8", errors="ignore")
-    norm_text, existing_block, _ = normalize_existing_change_sections(text, cycles, down_mm, up_mm, report)
-
-    if use_existing_tpl and existing_block:
-        change_block = existing_block
-        report.append("Plantilla: se usó primera sección existente (normalizada).")
-    else:
-        change_block = build_change_block_from_template(cycles, down_mm, up_mm, user_tpl or DEFAULT_CHANGE_TEMPLATE)
-        report.append("Plantilla: se usó plantilla definida/por defecto.")
-
-    duplicated = duplicate_with_change_blocks(norm_text, repeats, change_block, report)
-    return duplicated.encode("utf-8")
-
-def process_3mf(src_bytes: bytes, repeats:int, cycles:int, down_mm:float, up_mm:float,
-                user_tpl:str, use_existing_tpl:bool):
-    """
-    - Modifica todos los *.gcode (prioriza Metadata/plate_*.gcode si existen).
-    - Recalcula *.gcode.md5 si corresponde.
-    - Devuelve bytes del .3mf, cantidad modificada y reporte.
-    """
-    report = []
-    zin = zipfile.ZipFile(io.BytesIO(src_bytes), "r", allowZip64=True)
-
-    # Leer todo a dict (evitar doble compresión encadenada)
-    files = {info.filename: zin.read(info.filename) for info in zin.infolist()}
-    zin.close()
-
-    # Elegir candidatos
-    all_gcodes = [n for n in files if n.lower().endswith(".gcode")]
-    plate_gcodes = [n for n in all_gcodes if "/plate_" in n.lower()]
-    targets = plate_gcodes or all_gcodes  # fallback si no son plate_*.gcode
-
-    modified = 0
-    for name in targets:
-        files[name] = process_one_gcode(files[name], repeats, cycles, down_mm, up_mm, user_tpl, use_existing_tpl, report)
-        modified += 1
-
-    # Recalcular MD5 vecinos
-    for name in list(files.keys()):
-        low = name.lower()
-        if low.endswith(".gcode.md5"):
-            gname = name[:-4]
-            if gname in files:
-                files[name] = (md5_bytes(files[gname]) + "\n").encode("ascii")
-
-    # Escribir salida
-    out_mem = io.BytesIO()
-    with zipfile.ZipFile(out_mem, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zout:
-        for n, b in files.items():
-            zout.writestr(n, b)
-        ts = datetime.utcnow().isoformat() + "Z"
-        rpt = [f"# Reporte ({ts})",
-               f"- GCODEs procesados: {modified}",
-               f"- Repeticiones: {repeats}",
-               f"- Ciclos: {cycles} | down={down_mm} | up={up_mm}"]
-        rpt.extend([f"- {r}" for r in report])
-        zout.writestr("Metadata/change_plates_report.txt", ("\n".join(rpt) + "\n").encode("utf-8"))
-    out_mem.seek(0)
-    return out_mem.getvalue(), modified, report
