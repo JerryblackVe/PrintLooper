@@ -24,38 +24,35 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 </style>
 """, unsafe_allow_html=True)
 
-# ===== Utils: obtener preview PNG del 3MF =====
-def get_preview_png(three_mf_bytes: bytes) -> bytes | None:
-    """
-    Prioriza Metadata/plate_1.png (case-insensitive).
-    Fallback: cualquier Metadata/plate_*.png, luego top_*.png o thumbnail_*.png.
-    """
-    with zipfile.ZipFile(io.BytesIO(three_mf_bytes), "r", allowZip64=True) as z:
-        names = [i.filename for i in z.infolist()]
-        low   = {n.lower(): n for n in names}
+# ===== Helpers =====
+PLATE_NUM_RE = re.compile(r"/plate_(\d+)\.gcode$", re.IGNORECASE)
 
-        # prioridad 1: plate_1.png exacto en metadata/
-        target = None
-        for k, v in low.items():
-            if k == "metadata/plate_1.png":
-                target = v; break
-        # prioridad 2: cualquier plate_*.png
-        if target is None:
-            for k, v in low.items():
-                if k.startswith("metadata/plate_") and k.endswith(".png"):
-                    target = v; break
-        # prioridad 3: top_*.png
-        if target is None:
-            for k, v in low.items():
-                if k.startswith("metadata/top_") and k.endswith(".png"):
-                    target = v; break
-        # prioridad 4: thumbnail_*.png
-        if target is None:
-            for k, v in low.items():
-                if k.startswith("metadata/thumbnail_") and k.endswith(".png"):
-                    target = v; break
-
-        return z.read(target) if target else None
+def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
+    """
+    Dado el dict 'files' (nombre->bytes) y el nombre de G-code (ej. Metadata/plate_1.gcode),
+    elige la preview correcta priorizando:
+      1) Metadata/plate_{N}.png
+      2) Metadata/top_{N}.png
+      3) Metadata/plate_{N}_small.png
+    """
+    if not plate_name:
+        return None
+    m = PLATE_NUM_RE.search(plate_name)
+    if not m:
+        return None
+    n = m.group(1)
+    # prioridades
+    candidates = [
+        f"Metadata/plate_{n}.png",
+        f"Metadata/top_{n}.png",
+        f"Metadata/plate_{n}_small.png",
+    ]
+    for name in candidates:
+        # buscar case-insensitive
+        for k, v in files.items():
+            if k.lower() == name.lower():
+                return v
+    return None
 
 # ===== Header =====
 c1, c2 = st.columns([0.22, 0.78])
@@ -90,16 +87,16 @@ models = []
 cols = st.columns(len(uploads))
 for i, up in enumerate(uploads):
     data = up.read()
-    meta = read_3mf(data)  # core, shutdown, plate_name, files
+    meta = read_3mf(data)  # -> {"files","plate_name","core","shutdown"}
 
     with cols[i]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown(f"**{up.name}**")
-        preview = get_preview_png(data)
+        preview = select_preview_from_files(meta["files"], meta["plate_name"])
         if preview:
             st.image(preview, use_container_width=True)
         else:
-            st.image("https://via.placeholder.com/320x200?text=plate_1.png+not+found",
+            st.image("https://via.placeholder.com/320x200?text=No+preview+for+current+plate",
                      use_container_width=True)
         reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
         st.markdown('</div>', unsafe_allow_html=True)
