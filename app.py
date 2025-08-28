@@ -1,3 +1,4 @@
+# app.py
 import io, zipfile
 import streamlit as st
 from core.gcode_loop import rebuild_cycles, DEFAULT_CHANGE_TEMPLATE
@@ -23,11 +24,11 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# ===== Header =====
-c1, c2 = st.columns([0.12, 0.88], vertical_alignment="center")
+# ===== Header (fix: sin vertical_alignment, logo más grande) =====
+c1, c2 = st.columns([0.15, 0.85])
 with c1:
     try:
-        st.image(LOGO_PATH, use_container_width=True)  # corregido
+        st.image(LOGO_PATH, width=140)  # ajustá 140–170 a gusto
     except Exception:
         st.write("🖨️")
 with c2:
@@ -63,10 +64,10 @@ for i, up in enumerate(uploads):
         st.markdown(f"**{up.name}**")
         if meta["thumbs"]:
             z = zipfile.ZipFile(io.BytesIO(data), "r")
-            st.image(z.read(meta["thumbs"][0]), use_container_width=True)  # corregido
+            st.image(z.read(meta["thumbs"][0]), use_container_width=True)
             z.close()
         else:
-            st.image("https://via.placeholder.com/320x200?text=3MF", use_container_width=True)  # corregido
+            st.image("https://via.placeholder.com/320x200?text=3MF", use_container_width=True)
         reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
         st.markdown('</div>', unsafe_allow_html=True)
 
