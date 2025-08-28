@@ -20,6 +20,9 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
   border-radius: 14px; padding: 0.6rem 1.1rem; font-weight: 700; }
 .card { border:1px solid #2a2f3a; border-radius:16px; padding:12px; background:#141821; }
 .small { opacity:.85; font-size:.9rem; }
+.row { display:flex; gap:12px; align-items:center; }
+.dot { width:14px; height:14px; border-radius:50%; display:inline-block; border:1px solid #00000033; }
+.kpi { font-weight:600; }
 .footer { opacity:.7; font-size:.85rem; padding-top:1.2rem; border-top:1px dashed #2a2f3a; }
 </style>
 """, unsafe_allow_html=True)
@@ -28,81 +31,103 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 PLATE_NUM_RE = re.compile(r"plate_(\d+)\.gcode$", re.IGNORECASE)
 HOTEND_RE = re.compile(r"^\s*M10(?:4|9)\b.*?\bS(?P<t>\d+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 BED_RE    = re.compile(r"^\s*M1(?:40|90)\b.*?\bS(?P<t>\d+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
-COLOR_PATTERNS = [
-    re.compile(r"^\s*M600\b", re.IGNORECASE | re.MULTILINE),            # pausa/cambio filamento
-    re.compile(r"^\s*T(\d+)\s*(?:;.*)?$", re.IGNORECASE | re.MULTILINE), # cambios Tn (no se usa directo)
-    re.compile(r"COLOR[_\s-]*CHANGE", re.IGNORECASE),                    # comentarios
-]
 
-def extract_first_temp(gcode_text: str) -> tuple[float|None, float|None]:
-    """Devuelve (hotend, bed) si aparecen en el G-code (primer match)."""
+def extract_first_temp(gcode_text: str):
     txt = gcode_text or ""
-    m_h = HOTEND_RE.search(txt)
-    m_b = BED_RE.search(txt)
-    hot = float(m_h.group("t")) if m_h else None
-    bed = float(m_b.group("t")) if m_b else None
-    return hot, bed
+    m_h = HOTEND_RE.search(txt); m_b = BED_RE.search(txt)
+    return (float(m_h.group("t")) if m_h else None,
+            float(m_b.group("t")) if m_b else None)
 
 def apply_temp_overrides(gcode_text: str, hotend: float|None, bed: float|None) -> str:
-    """Reemplaza la PRIMERA ocurrencia de M104/M109 y M140/M190. Si no existen, inserta al inicio."""
     text = gcode_text or ""
-
-    def _replace_first(patt, new_s):
+    def repl_first(patt, newS):
         m = patt.search(text)
-        if not m:
-            return None
-        s, e = m.span()
-        return text[:s] + re.sub(r"S\d+(\.\d+)?", new_s, text[s:e]) + text[e:]
-
+        if not m: return None
+        s,e = m.span()
+        return text[:s] + re.sub(r"S\d+(\.\d+)?", newS, text[s:e]) + text[e:]
     if hotend is not None:
-        replaced = _replace_first(HOTEND_RE, f"S{int(hotend)}")
-        text = replaced if replaced is not None else f"; PrintLooper override\nM104 S{int(hotend)}\n{text}"
-
+        r = repl_first(HOTEND_RE, f"S{int(hotend)}")
+        text = r if r is not None else f"; PrintLooper override\nM104 S{int(hotend)}\n{text}"
     if bed is not None:
-        replaced = _replace_first(BED_RE, f"S{int(bed)}")
-        text = replaced if replaced is not None else f"; PrintLooper override\nM140 S{int(bed)}\n{text}"
-
+        r = repl_first(BED_RE, f"S{int(bed)}")
+        text = r if r is not None else f"; PrintLooper override\nM140 S{int(bed)}\n{text}"
     return text
 
-def detect_color_events(gcode_text: str) -> dict:
-    """Cuenta eventos típicos de cambio de color/herramienta."""
-    txt = gcode_text or ""
-    counts = {"M600": 0, "ToolChanges": 0, "Comments": 0, "ToolsUsed": set()}
-    counts["M600"] = sum(1 for _ in COLOR_PATTERNS[0].finditer(txt))
-    tools = re.findall(r"^\s*T(\d+)\s*(?:;.*)?$", txt, flags=re.IGNORECASE | re.MULTILINE)
-    counts["ToolChanges"] = len(tools)
-    counts["ToolsUsed"] = set(tools)
-    counts["Comments"] = sum(1 for _ in COLOR_PATTERNS[2].finditer(txt))
-    return counts
+def parse_time(text:str) -> str|None:
+    t = text or ""
+    # ;TIME:2624   (segundos)
+    m = re.search(r"^\s*;TIME:(\d+)\s*$", t, re.MULTILINE)
+    if m:
+        sec = int(m.group(1)); h=sec//3600; mnt=(sec%3600)//60; s=sec%60
+        return f"{h}h {mnt:02d}m {s:02d}s" if h else f"{mnt}m {s:02d}s"
+    # ; estimated printing time (normal mode) = 0h 43m 44s
+    m = re.search(r"estimated printing time.*?=\s*([0-9hms :]+)", t, re.IGNORECASE)
+    if m:
+        return m.group(1).strip().replace("  "," ")
+    return None
 
-def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
+def parse_filament_usage(text:str):
     """
-    Imagen correspondiente al MISMO número de plate que el G-code activo.
-    Prioridad: metadata/plate_{N}.png → top_{N}.png → plate_{N}_small.png → cualquier thumbnail.
+    Devuelve lista por slot: [{'g':..,'m':..,'color':'#xxxxxx'}].
+    Soporta Orca/Bambu:
+      ; filament used [g] = 25.59, 9.58, 9.41
+      ; filament used [m] = 8.44, 3.16, 3.11
+      ; filament_color = #000000;#FFFFFF;#FFFF00   (a veces 'colour' y separadores , ;)
     """
-    if not plate_name:
-        return None
+    t = text or ""
+    nums_g = re.search(r"filament used\s*\[\s*g\s*\]\s*=\s*([0-9.,;\s]+)", t, re.IGNORECASE)
+    nums_m = re.search(r"filament used\s*\[\s*m\s*\]\s*=\s*([0-9.,;\s]+)", t, re.IGNORECASE)
+    colors = re.search(r"filament[_ ]colou?r\s*=\s*([#0-9a-fA-F;\s,]+)", t, re.IGNORECASE)
+
+    gs = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", nums_g.group(1))] if nums_g else []
+    ms = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", nums_m.group(1))] if nums_m else []
+    cs = []
+    if colors:
+        cs = [c.strip() for c in re.split(r"[;,]", colors.group(1)) if c.strip()]
+
+    n = max(len(gs), len(ms), len(cs))
+    slots = []
+    for i in range(n):
+        slots.append({
+            "g": gs[i] if i < len(gs) else None,
+            "m": ms[i] if i < len(ms) else None,
+            "color": cs[i] if i < len(cs) else "#999999"
+        })
+    return slots
+
+def select_preview_from_files(files: dict, plate_name: str) -> bytes|None:
+    if not plate_name: return None
     m = PLATE_NUM_RE.search(plate_name)
-    if not m:
-        return None
+    if not m: return None
     n = m.group(1)
-
     lower_map = {k.lower(): k for k in files.keys()}
     for cand in [f"metadata/plate_{n}.png", f"metadata/top_{n}.png", f"metadata/plate_{n}_small.png"]:
-        if cand in lower_map:
-            return files[lower_map[cand]]
+        if cand in lower_map: return files[lower_map[cand]]
     for lk, ok in lower_map.items():
         if lk.startswith("metadata/thumbnail_") and lk.endswith(".png"):
             return files[ok]
     return None
 
+def color_row(slots:list[dict]):
+    if not slots: return
+    rows = []
+    for idx, s in enumerate(slots, start=1):
+        g = "-" if s.get("g") is None else f"{s['g']:.2f} g"
+        m = "-" if s.get("m") is None else f"{s['m']:.2f} m"
+        c = s.get("color","#999999")
+        rows.append(
+            f"<div class='row'><span class='dot' style='background:{c}'></span>"
+            f"<span class='small'>Slot {idx}</span>"
+            f"<span class='small' style='margin-left:6px'>PLA</span>"
+            f"<span class='small' style='margin-left:auto'>{g}<br>{m}</span></div>"
+        )
+    st.markdown("<br>".join(rows), unsafe_allow_html=True)
+
 # ===== Header =====
 c1, c2 = st.columns([0.22, 0.78])
 with c1:
-    try:
-        st.image(LOGO_PATH, width=LOGO_SIZE)
-    except Exception:
-        st.write("🖨️")
+    try: st.image(LOGO_PATH, width=LOGO_SIZE)
+    except Exception: st.write("🖨️")
 with c2:
     st.markdown("## PrintLooper")
     st.caption("Duplica y encadena placas con cambios automáticos para tu granja de impresión.")
@@ -110,7 +135,7 @@ with c2:
 # ===== Sidebar =====
 with st.sidebar:
     st.markdown("### Parámetros globales")
-    cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=5, step=1)  # default 5
+    cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=5, step=1)
     down_mm = st.number_input("Descenso Z (mm)", min_value=1.0, value=20.0, step=0.5, format="%.1f")
     up_mm   = st.number_input("Ascenso Z (mm)",   min_value=1.0, value=75.0, step=0.5, format="%.1f")
     mode    = st.radio("Orden de impresión", ["serial","interleaved"],
@@ -131,33 +156,34 @@ for i, up in enumerate(uploads):
     data = up.read()
     meta = read_3mf(data)  # {files, plate_name, core, shutdown}
 
-    # Detectar temperaturas + cambios de color
-    hot, bed = extract_first_temp(meta["core"])
-    color_info = detect_color_events(meta["core"])
+    core_txt = meta["core"]
+    hot, bed = extract_first_temp(core_txt)
+    est_time = parse_time(core_txt) or "—"
+    slots = parse_filament_usage(core_txt)
 
     with cols[i]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown(f"**{up.name}**")
-        preview = select_preview_from_files(meta["files"], meta["plate_name"])
-        if preview:
-            st.image(preview, use_container_width=True)
-        else:
-            st.image("https://via.placeholder.com/320x200?text=No+preview+for+current+plate",
-                     use_container_width=True)
+        st.markdown(f"**{up.name}**  \n<span class='small'>/{meta['plate_name'].split('/')[-1].split('.')[0]}</span>", unsafe_allow_html=True)
 
+        preview = select_preview_from_files(meta["files"], meta["plate_name"])
+        if preview: st.image(preview, use_container_width=True)
+        else:       st.image("https://via.placeholder.com/320x200?text=No+preview", use_container_width=True)
+
+        # Tiempo
+        st.markdown(f"<div class='small kpi'>{est_time}</div>", unsafe_allow_html=True)
+
+        # Repeticiones (input compacto)
         reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
 
-        st.markdown("<div class='small'>**Detectado:**</div>", unsafe_allow_html=True)
+        # Filamentos por slot
+        color_row(slots)
+
+        # Temps detectadas + overrides opcionales
         st.markdown(
             f"<div class='small'>Hotend: <b>{'-' if hot is None else int(hot)}°C</b> — "
-            f"Cama: <b>{'-' if bed is None else int(bed)}°C</b><br>"
-            f"Cambios de color: T={color_info['ToolChanges']} "
-            f"(tools: {', '.join(sorted(color_info['ToolsUsed'])) or '—'}), "
-            f"M600={color_info['M600']}, "
-            f"Comentarios={color_info['Comments']}</div>",
+            f"Cama: <b>{'-' if bed is None else int(bed)}°C</b></div>",
             unsafe_allow_html=True
         )
-
         mod_temps = st.checkbox("Modificar temperaturas", key=f"modt_{i}", value=False)
         new_hot = new_bed = None
         if mod_temps:
@@ -173,7 +199,7 @@ for i, up in enumerate(uploads):
         "raw": data,
         "repeats": int(reps),
         "plate_name": meta["plate_name"],
-        "core": meta["core"],
+        "core": core_txt,
         "shutdown": meta["shutdown"],
         "files": meta["files"],
         "override_hot": new_hot if mod_temps else None,
@@ -207,7 +233,8 @@ if st.button("Generar 3MF compuesto"):
             file_name=f"queue_{models[0]['name'].rsplit('.',1)[0]}.3mf",
             mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
         )
-        # Log
+
+        # Log breve
         lines = [f"Orden: {'Serie' if mode=='serial' else 'Intercalado'}"]
         for m in models:
             oh = "-" if m["override_hot"] is None else m["override_hot"]
