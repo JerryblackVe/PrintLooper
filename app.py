@@ -1,16 +1,17 @@
 # app.py
-import io, zipfile
+import io, zipfile, re
 import streamlit as st
 from core.gcode_loop import rebuild_cycles, DEFAULT_CHANGE_TEMPLATE
 from core.queue_builder import read_3mf, compose_sequence, build_final_3mf
 
-APP_NAME = "PrintLooper — Auto Swap for 3MF"
-LOGO_PATH = "assets/PrintLooper.png"
+APP_NAME   = "PrintLooper — Auto Swap for 3MF"
+LOGO_PATH  = "assets/PrintLooper.png"
+LOGO_SIZE  = 180  # ajustá a gusto
 
 st.set_page_config(page_title=APP_NAME, page_icon="🖨️", layout="wide")
 
 # ===== CSS =====
-CUSTOM_CSS = """
+st.markdown("""
 <style>
 .main .block-container {max-width: 1200px; padding-top: 1.2rem;}
 h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
@@ -21,14 +22,46 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 .thumb { border-radius:10px; border:1px solid #2a2f3a; }
 .footer { opacity:.7; font-size:.85rem; padding-top:1.2rem; border-top:1px dashed #2a2f3a; }
 </style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# ===== Header (fix: sin vertical_alignment, logo más grande) =====
-c1, c2 = st.columns([0.15, 0.85])
+# ===== Utils: obtener preview PNG del 3MF =====
+def get_preview_png(three_mf_bytes: bytes) -> bytes | None:
+    """
+    Prioriza Metadata/plate_1.png (case-insensitive).
+    Fallback: cualquier Metadata/plate_*.png, luego top_*.png o thumbnail_*.png.
+    """
+    with zipfile.ZipFile(io.BytesIO(three_mf_bytes), "r", allowZip64=True) as z:
+        names = [i.filename for i in z.infolist()]
+        low   = {n.lower(): n for n in names}
+
+        # prioridad 1: plate_1.png exacto en metadata/
+        target = None
+        for k, v in low.items():
+            if k == "metadata/plate_1.png":
+                target = v; break
+        # prioridad 2: cualquier plate_*.png
+        if target is None:
+            for k, v in low.items():
+                if k.startswith("metadata/plate_") and k.endswith(".png"):
+                    target = v; break
+        # prioridad 3: top_*.png
+        if target is None:
+            for k, v in low.items():
+                if k.startswith("metadata/top_") and k.endswith(".png"):
+                    target = v; break
+        # prioridad 4: thumbnail_*.png
+        if target is None:
+            for k, v in low.items():
+                if k.startswith("metadata/thumbnail_") and k.endswith(".png"):
+                    target = v; break
+
+        return z.read(target) if target else None
+
+# ===== Header =====
+c1, c2 = st.columns([0.22, 0.78])
 with c1:
     try:
-        st.image(LOGO_PATH, width=100)  # ajustá 140–170 a gusto
+        st.image(LOGO_PATH, width=LOGO_SIZE)
     except Exception:
         st.write("🖨️")
 with c2:
@@ -57,17 +90,17 @@ models = []
 cols = st.columns(len(uploads))
 for i, up in enumerate(uploads):
     data = up.read()
-    meta = read_3mf(data)
+    meta = read_3mf(data)  # core, shutdown, plate_name, files
 
     with cols[i]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown(f"**{up.name}**")
-        if meta["thumbs"]:
-            z = zipfile.ZipFile(io.BytesIO(data), "r")
-            st.image(z.read(meta["thumbs"][0]), use_container_width=True)
-            z.close()
+        preview = get_preview_png(data)
+        if preview:
+            st.image(preview, use_container_width=True)
         else:
-            st.image("https://via.placeholder.com/320x200?text=3MF", use_container_width=True)
+            st.image("https://via.placeholder.com/320x200?text=plate_1.png+not+found",
+                     use_container_width=True)
         reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
         st.markdown('</div>', unsafe_allow_html=True)
 
