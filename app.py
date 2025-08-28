@@ -76,22 +76,61 @@ def inject_theme_css(theme: str):
       border-radius:12px; padding:.65rem 1.05rem; font-weight:700;
       border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);
       box-shadow:0 6px 16px color-mix(in srgb, var(--accent) 20%, transparent);
-      background: var(--accent) !important; color: black !important;
+      background: var(--accent) !important; color:#0E1117 !important;
     }}
     .stButton>button:hover, .stDownloadButton>button:hover{{ filter:brightness(1.05); transform:translateY(-1px); }}
 
-    /* Inputs / radios / uploader */
-    .stNumberInput, .stRadio, .stSelectbox, .stCheckbox, .stTextArea, .stFileUploader{{ background:var(--panel)!important; border-radius:12px!important; }}
+    /* Componentes base */
+    .stNumberInput, .stRadio, .stSelectbox, .stCheckbox, .stTextArea, .stFileUploader{{
+      background:var(--panel)!important; border-radius:12px!important;
+    }}
     [data-baseweb="input"]>div{{ background:transparent!important; color:var(--text)!important; }}
+
+    /* Expander */
     .streamlit-expanderHeader{{ font-weight:700; color:var(--text); border-radius:12px!important; border:1px solid var(--border); background:var(--panel); }}
     .streamlit-expanderContent{{ background:var(--panel); }}
+
+    /* Uploader */
     [data-testid="stFileUploaderDropzone"]{{ border:1px dashed #2a3342!important; background:var(--card)!important; border-radius:14px!important; }}
 
     .footer{{ opacity:.8; font-size:.9rem; margin-top:12px; color:var(--muted); }}
     </style>
     """, unsafe_allow_html=True)
 
-# Inyectar CSS del tema actual
+    # Ajustes específicos de TEMA CLARO
+    st.markdown("""
+    <style>
+    html[data-theme="light"] .stNumberInput input,
+    html[data-theme="light"] textarea,
+    html[data-theme="light"] select {
+      background:#ffffff !important;
+      color:#0E1117 !important;
+      border:1px solid var(--border) !important;
+      border-radius:8px !important;
+    }
+    html[data-theme="light"] .streamlit-expanderHeader {
+      background:#F0F3F8 !important;
+      border:1px solid #DDE3EA !important;
+      color:#0E1117 !important;
+    }
+    html[data-theme="light"] .streamlit-expanderContent {
+      background:#FFFFFF !important;
+    }
+    html[data-theme="light"] [data-testid="stFileUploaderDropzone"] {
+      border:1px dashed #AAB3C2 !important;
+      background:#FFFFFF !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Flag para que el CSS pueda saber el tema actual
+    st.markdown(f"""
+    <script>
+      document.documentElement.setAttribute("data-theme","{theme}");
+    </script>
+    """, unsafe_allow_html=True)
+
+# Inyectar CSS del tema actual al iniciar
 inject_theme_css(st.session_state.theme)
 
 # ========= HELPERS =========
@@ -151,7 +190,7 @@ with st.sidebar:
     theme_choice = st.toggle("Tema claro", value=(st.session_state.theme=="light"),
                              help="Activa el modo claro. Apaga para modo oscuro.")
     st.session_state.theme = "light" if theme_choice else "dark"
-    inject_theme_css(st.session_state.theme)  # reinyectar si cambia
+    inject_theme_css(st.session_state.theme)  # reinyecta CSS al cambiar
 
     st.markdown("### Parámetros globales")
     cycles  = st.number_input("Ciclos Z (por cambio)", 0, 200, 5, 1,
