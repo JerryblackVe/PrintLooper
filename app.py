@@ -19,73 +19,66 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 .stButton>button, .stDownloadButton>button {
   border-radius: 14px; padding: 0.6rem 1.1rem; font-weight: 700; }
 .card { border:1px solid #2a2f3a; border-radius:16px; padding:12px; background:#141821; }
-.small { opacity:.8; font-size:.9rem; }
+.small { opacity:.85; font-size:.9rem; }
 .footer { opacity:.7; font-size:.85rem; padding-top:1.2rem; border-top:1px dashed #2a2f3a; }
-ul { margin-top: .25rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ===== Helpers =====
 PLATE_NUM_RE = re.compile(r"plate_(\d+)\.gcode$", re.IGNORECASE)
-
 HOTEND_RE = re.compile(r"^\s*M10(?:4|9)\b.*?\bS(?P<t>\d+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
 BED_RE    = re.compile(r"^\s*M1(?:40|90)\b.*?\bS(?P<t>\d+(?:\.\d+)?)", re.IGNORECASE | re.MULTILINE)
-
 COLOR_PATTERNS = [
     re.compile(r"^\s*M600\b", re.IGNORECASE | re.MULTILINE),            # pausa/cambio filamento
-    re.compile(r"^\s*T(\d+)\s*(?:;.*)?$", re.IGNORECASE | re.MULTILINE), # cambio de herramienta/slot
-    re.compile(r"COLOR[_\s-]*CHANGE", re.IGNORECASE),                    # comentarios de color
+    re.compile(r"^\s*T(\d+)\s*(?:;.*)?$", re.IGNORECASE | re.MULTILINE), # cambios Tn (no se usa directo)
+    re.compile(r"COLOR[_\s-]*CHANGE", re.IGNORECASE),                    # comentarios
 ]
 
 def extract_first_temp(gcode_text: str) -> tuple[float|None, float|None]:
     """Devuelve (hotend, bed) si aparecen en el G-code (primer match)."""
-    m_h = HOTEND_RE.search(gcode_text)
-    m_b = BED_RE.search(gcode_text)
+    txt = gcode_text or ""
+    m_h = HOTEND_RE.search(txt)
+    m_b = BED_RE.search(txt)
     hot = float(m_h.group("t")) if m_h else None
     bed = float(m_b.group("t")) if m_b else None
     return hot, bed
 
 def apply_temp_overrides(gcode_text: str, hotend: float|None, bed: float|None) -> str:
     """Reemplaza la PRIMERA ocurrencia de M104/M109 y M140/M190. Si no existen, inserta al inicio."""
-    text = gcode_text
+    text = gcode_text or ""
 
-    def _replace_first(pattern, repl, txt):
-        # reemplazo de solo la primera coincidencia
-        return pattern.sub(repl, txt, count=1)
+    def _replace_first(patt, new_s):
+        m = patt.search(text)
+        if not m:
+            return None
+        s, e = m.span()
+        return text[:s] + re.sub(r"S\d+(\.\d+)?", new_s, text[s:e]) + text[e:]
 
-    # Hotend
     if hotend is not None:
-        if HOTEND_RE.search(text):
-            text = _replace_first(HOTEND_RE, lambda m: re.sub(r"S\d+(\.\d+)?", f"S{int(hotend)}", m.group(0)), text)
-        else:
-            text = f"; PrintLooper override\nM104 S{int(hotend)}\n" + text
+        replaced = _replace_first(HOTEND_RE, f"S{int(hotend)}")
+        text = replaced if replaced is not None else f"; PrintLooper override\nM104 S{int(hotend)}\n{text}"
 
-    # Bed
     if bed is not None:
-        if BED_RE.search(text):
-            text = _replace_first(BED_RE, lambda m: re.sub(r"S\d+(\.\d+)?", f"S{int(bed)}", m.group(0)), text)
-        else:
-            text = f"; PrintLooper override\nM140 S{int(bed)}\n" + text
+        replaced = _replace_first(BED_RE, f"S{int(bed)}")
+        text = replaced if replaced is not None else f"; PrintLooper override\nM140 S{int(bed)}\n{text}"
 
     return text
 
 def detect_color_events(gcode_text: str) -> dict:
     """Cuenta eventos típicos de cambio de color/herramienta."""
+    txt = gcode_text or ""
     counts = {"M600": 0, "ToolChanges": 0, "Comments": 0, "ToolsUsed": set()}
-    # M600
-    counts["M600"] = len(COLOR_PATTERNS[0].finditer(gcode_text))
-    # Tool changes Tn
-    tools = re.findall(r"^\s*T(\d+)\s*(?:;.*)?$", gcode_text, flags=re.IGNORECASE | re.MULTILINE)
+    counts["M600"] = sum(1 for _ in COLOR_PATTERNS[0].finditer(txt))
+    tools = re.findall(r"^\s*T(\d+)\s*(?:;.*)?$", txt, flags=re.IGNORECASE | re.MULTILINE)
     counts["ToolChanges"] = len(tools)
     counts["ToolsUsed"] = set(tools)
-    # Comments COLOR_CHANGE
-    counts["Comments"] = len(COLOR_PATTERNS[2].finditer(gcode_text))
+    counts["Comments"] = sum(1 for _ in COLOR_PATTERNS[2].finditer(txt))
     return counts
 
 def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
     """
     Imagen correspondiente al MISMO número de plate que el G-code activo.
-    Prioridad: metadata/plate_{N}.png, luego top_{N}.png, luego plate_{N}_small.png, luego cualquier thumbnail.
+    Prioridad: metadata/plate_{N}.png → top_{N}.png → plate_{N}_small.png → cualquier thumbnail.
     """
     if not plate_name:
         return None
@@ -98,7 +91,6 @@ def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
     for cand in [f"metadata/plate_{n}.png", f"metadata/top_{n}.png", f"metadata/plate_{n}_small.png"]:
         if cand in lower_map:
             return files[lower_map[cand]]
-
     for lk, ok in lower_map.items():
         if lk.startswith("metadata/thumbnail_") and lk.endswith(".png"):
             return files[ok]
@@ -135,12 +127,11 @@ if not uploads:
 # ===== Modelos =====
 models = []
 cols = st.columns(len(uploads)) if len(uploads) else [st]
-
 for i, up in enumerate(uploads):
     data = up.read()
     meta = read_3mf(data)  # {files, plate_name, core, shutdown}
 
-    # Extraer temperaturas + color
+    # Detectar temperaturas + cambios de color
     hot, bed = extract_first_temp(meta["core"])
     color_info = detect_color_events(meta["core"])
 
@@ -154,14 +145,12 @@ for i, up in enumerate(uploads):
             st.image("https://via.placeholder.com/320x200?text=No+preview+for+current+plate",
                      use_container_width=True)
 
-        st.markdown("**Repeticiones**")
-        reps = st.number_input("", min_value=1, value=1, step=1, key=f"reps_{i}")
+        reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
 
-        # Resumen de configuración detectada
         st.markdown("<div class='small'>**Detectado:**</div>", unsafe_allow_html=True)
         st.markdown(
-            f"<div class='small'>Hotend: <b>{('-' if hot is None else int(hot))}°C</b> — "
-            f"Cama: <b>{('-' if bed is None else int(bed))}°C</b><br>"
+            f"<div class='small'>Hotend: <b>{'-' if hot is None else int(hot)}°C</b> — "
+            f"Cama: <b>{'-' if bed is None else int(bed)}°C</b><br>"
             f"Cambios de color: T={color_info['ToolChanges']} "
             f"(tools: {', '.join(sorted(color_info['ToolsUsed'])) or '—'}), "
             f"M600={color_info['M600']}, "
@@ -169,7 +158,6 @@ for i, up in enumerate(uploads):
             unsafe_allow_html=True
         )
 
-        # Overrides de temperatura
         mod_temps = st.checkbox("Modificar temperaturas", key=f"modt_{i}", value=False)
         new_hot = new_bed = None
         if mod_temps:
@@ -198,7 +186,7 @@ change_block = (tpl if use_tpl else DEFAULT_CHANGE_TEMPLATE).replace("{{CYCLES}}
 
 if st.button("Generar 3MF compuesto"):
     try:
-        # Aplicar overrides por modelo ANTES de componer
+        # Aplicar overrides antes de componer
         seq_items = []
         for m in models:
             core = m["core"]
