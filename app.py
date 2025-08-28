@@ -28,7 +28,7 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 c1, c2 = st.columns([0.15, 0.85])
 with c1:
     try:
-        st.image(LOGO_PATH, width=500)  # ajustá 140–170 a gusto
+        st.image(LOGO_PATH, width=1500)  # ajustá 140–170 a gusto
     except Exception:
         st.write("🖨️")
 with c2:
