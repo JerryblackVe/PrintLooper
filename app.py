@@ -67,6 +67,12 @@ with st.sidebar:
     wait_minutes = st.number_input("Minutos de espera", min_value=0.0, value=2.0, step=0.5,
                                    format="%.1f", disabled=not wait_enabled)
 
+    st.markdown("---")
+    st.markdown("### Modo prueba (solo movimientos)")
+    test_repeats = st.number_input("Repeticiones de prueba", min_value=1, value=3, step=1)
+    test_safety_z = st.number_input("Altura segura Z (mm)", min_value=1.0, value=10.0, step=1.0, format="%.1f")
+    test_xy_speed = st.number_input("Velocidad XY (mm/min)", min_value=100, value=6000, step=100)
+
 with st.expander("Plantilla de 'change plates'"):
     tpl = st.text_area("Plantilla {{CYCLES}}", value=DEFAULT_CHANGE_TEMPLATE, height=220)
 
@@ -120,18 +126,16 @@ if wait_enabled and wait_minutes > 0:
         f"G4 S{seconds}\n"
     )
 
-# change_block final que se inserta entre impresiones
+# change_block con espera previa
 change_block_final = pre_wait_block + change_block
 
-# ====== Botón generar ======
+# ====== Botón: generar cola normal ======
 if st.button("Generar 3MF compuesto"):
     try:
         seq_items = [{"name": m["name"], "core": m["core"], "shutdown": m["shutdown"], "repeats": m["repeats"]}
                      for m in models]
 
-        # Usamos el bloque con espera opcional
         composite_gcode = compose_sequence(seq_items, change_block_final, mode)
-
         base = models[0]
         final_3mf = build_final_3mf(base["files"], base["plate_name"], composite_gcode)
 
@@ -144,16 +148,81 @@ if st.button("Generar 3MF compuesto"):
             mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
         )
 
-        # Resumen
-        resumen = [
-            "Orden: " + ("Serie" if mode == "serial" else "Intercalado"),
+        st.code(
+            "Orden: " + ("Serie" if mode == "serial" else "Intercalado") + "\n" +
             f"Espera antes de cambio: {'Sí' if wait_enabled else 'No'}"
-            + (f" ({wait_minutes:.1f} min)" if wait_enabled and wait_minutes > 0 else "")
-        ]
-        resumen += [f"- {m['name']}: x{m['repeats']}" for m in models]
-        st.code("\n".join(resumen), language="text")
+            + (f" ({wait_minutes:.1f} min)" if wait_enabled and wait_minutes > 0 else "") + "\n" +
+            "\n".join([f"- {m['name']}: x{m['repeats']}" for m in models]),
+            language="text"
+        )
 
         st.markdown('<div class="footer">Hecho con ❤️ por PrintLooper</div>', unsafe_allow_html=True)
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
+# ====== Botón: generar 3MF de PRUEBA (solo movimientos) ======
+def build_test_core(safety_z: float, xy_speed: int) -> str:
+    """
+    G-code sintético SIN extrusión. Sirve para probar:
+    - homing, alturas seguras, movimientos XY
+    - espera de enfriado (se inserta fuera de este bloque)
+    - rutina de cambio (tu plantilla)
+    """
+    return f"""\
+; ===== PrintLooper TEST CORE (no imprime) =====
+G90                 ; coordenadas absolutas
+M104 S0             ; hotend off
+M106 S0             ; fan off
+G28                 ; homing
+G1 Z{safety_z:.2f} F1200    ; subir a altura segura
+; pequeño recorrido de verificación
+G1 X20 Y20 F{xy_speed}
+G1 X220 Y20 F{xy_speed}
+G1 X220 Y220 F{xy_speed}
+G1 X20 Y220 F{xy_speed}
+G1 X120 Y120 F{xy_speed}
+G4 S2               ; pausa corta
+; ===== fin test core =====
+"""
+
+def build_test_shutdown() -> str:
+    return """\
+; ===== PrintLooper TEST SHUTDOWN =====
+M104 S0
+M140 S0
+M106 S0
+M84
+"""
+
+st.markdown("---")
+if st.button("🧪 Generar 3MF de prueba (solo movimientos)"):
+    try:
+        # core de prueba + repeticiones + tu bloque de cambio (con espera previa)
+        core_test = build_test_core(test_safety_z, int(test_xy_speed))
+        shutdown_test = build_test_shutdown()
+
+        seq_test = [{"name": "TEST", "core": core_test, "shutdown": shutdown_test, "repeats": int(test_repeats)}]
+        composite_gcode = compose_sequence(seq_test, change_block_final, mode)
+
+        # usar el primer 3MF como esqueleto
+        base = models[0]
+        final_3mf = build_final_3mf(base["files"], base["plate_name"], composite_gcode)
+
+        st.success("✅ 3MF de prueba generado.")
+        st.download_button(
+            "⬇️ Descargar 3MF de prueba",
+            data=final_3mf,
+            file_name="printlooper_test_moves.3mf",
+            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
+        )
+
+        st.code(
+            f"Test: x{test_repeats} | Zsegura={test_safety_z:.1f} mm | XY F={test_xy_speed} mm/min\n" +
+            f"Espera antes de cambio: {'Sí' if wait_enabled else 'No'}" +
+            (f" ({wait_minutes:.1f} min)" if wait_enabled and wait_minutes > 0 else ""),
+            language="text"
+        )
 
     except Exception as e:
         st.error(f"Error: {e}")
