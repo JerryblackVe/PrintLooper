@@ -1,5 +1,5 @@
 # app.py
-import io, zipfile, re
+import io, zipfile, re, hashlib
 import streamlit as st
 from core.gcode_loop import rebuild_cycles, DEFAULT_CHANGE_TEMPLATE
 from core.queue_builder import read_3mf, compose_sequence, build_final_3mf
@@ -24,7 +24,7 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 </style>
 """, unsafe_allow_html=True)
 
-# ====== Helper: preview según plate activo ======
+# ===== Helper: preview por plate activo =====
 PLATE_NUM_RE = re.compile(r"plate_(\d+)\.gcode$", re.IGNORECASE)
 def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
     if not plate_name:
@@ -42,7 +42,35 @@ def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
             return files[ok]
     return None
 
-# ====== Header ======
+# ===== Esqueleto 3MF mínimo (si no hay uploads) =====
+def minimal_3mf_skeleton() -> dict[str, bytes]:
+    content_types = b"""<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="gcode" ContentType="text/plain"/>
+  <Default Extension="md5" ContentType="text/plain"/>
+</Types>"""
+    rels = b"""<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
+</Relationships>"""
+    model = b"""<?xml version="1.0" encoding="UTF-8"?>
+<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+  <resources/>
+  <build/>
+</model>"""
+    # estructura ZIP como dict nombre->bytes
+    return {
+        "[Content_Types].xml": content_types,
+        "_rels/.rels": rels,
+        "3D/3dmodel.model": model,
+        "Metadata/plate_1.gcode": b"; PrintLooper minimal placeholder\n",
+        "Metadata/plate_1.gcode.md5": b"0\n",
+    }
+
+# ===== Header =====
 c1, c2 = st.columns([0.22, 0.78])
 with c1:
     try: st.image(LOGO_PATH, width=LOGO_SIZE)
@@ -51,7 +79,7 @@ with c2:
     st.markdown("## PrintLooper")
     st.caption("Duplica y encadena placas con cambios automáticos para tu granja de impresión.")
 
-# ====== Sidebar: parámetros globales ======
+# ===== Sidebar =====
 with st.sidebar:
     st.markdown("### Parámetros globales")
     cycles  = st.number_input("Ciclos Z (por cambio)", min_value=0, value=5, step=1)  # default 5
@@ -76,47 +104,34 @@ with st.sidebar:
 with st.expander("Plantilla de 'change plates'"):
     tpl = st.text_area("Plantilla {{CYCLES}}", value=DEFAULT_CHANGE_TEMPLATE, height=220)
 
-# ====== Uploader ======
-uploads = st.file_uploader("Subí uno o más .3mf", type=["3mf"], accept_multiple_files=True)
-if not uploads:
-    st.stop()
+# ===== Uploads (opcionales para modo prueba) =====
+uploads = st.file_uploader("Subí uno o más .3mf (opcional para prueba; se usa el 1º como esqueleto)", type=["3mf"], accept_multiple_files=True)
 
-# ====== Tarjetas por modelo: preview + repeticiones ======
+# ===== Tarjetas por modelo: preview + repeticiones =====
 models = []
-cols = st.columns(len(uploads)) if len(uploads) else [st]
-for i, up in enumerate(uploads):
-    data = up.read()
-    meta = read_3mf(data)  # {files, plate_name, core, shutdown}
+if uploads:
+    cols = st.columns(len(uploads))
+    for i, up in enumerate(uploads):
+        data = up.read()
+        meta = read_3mf(data)
+        with cols[i]:
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown(f"**{up.name}**  \n<span class='small'>/{meta['plate_name'].split('/')[-1].split('.')[0]}</span>", unsafe_allow_html=True)
+            preview = select_preview_from_files(meta["files"], meta["plate_name"])
+            if preview: st.image(preview, use_container_width=True)
+            else:       st.image("https://via.placeholder.com/320x200?text=No+preview", use_container_width=True)
+            reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-    with cols[i]:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown(f"**{up.name}**  \n<span class='small'>/{meta['plate_name'].split('/')[-1].split('.')[0]}</span>",
-                    unsafe_allow_html=True)
+        models.append({
+            "name": up.name, "raw": data, "repeats": int(reps),
+            "plate_name": meta["plate_name"], "core": meta["core"],
+            "shutdown": meta["shutdown"], "files": meta["files"],
+        })
 
-        preview = select_preview_from_files(meta["files"], meta["plate_name"])
-        if preview:
-            st.image(preview, use_container_width=True)
-        else:
-            st.image("https://via.placeholder.com/320x200?text=No+preview", use_container_width=True)
-
-        reps = st.number_input("Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    models.append({
-        "name": up.name,
-        "raw": data,
-        "repeats": int(reps),
-        "plate_name": meta["plate_name"],
-        "core": meta["core"],          # para componer
-        "shutdown": meta["shutdown"],
-        "files": meta["files"],
-    })
-
-# ====== Construcción del bloque de cambio ======
+# ===== Bloque de cambio (con espera previa opcional) =====
 cycle_block = rebuild_cycles(cycles, down_mm, up_mm, None, None)
 change_block = (tpl if use_tpl else DEFAULT_CHANGE_TEMPLATE).replace("{{CYCLES}}", cycle_block)
-
-# Bloque previo: apagar cama + esperar (si está habilitado)
 pre_wait_block = ""
 if wait_enabled and wait_minutes > 0:
     seconds = int(wait_minutes * 60)
@@ -125,104 +140,62 @@ if wait_enabled and wait_minutes > 0:
         "M140 S0\n"
         f"G4 S{seconds}\n"
     )
-
-# change_block con espera previa
 change_block_final = pre_wait_block + change_block
 
-# ====== Botón: generar cola normal ======
-if st.button("Generar 3MF compuesto"):
+# ===== Cola normal (requiere uploads) =====
+if uploads and st.button("Generar 3MF compuesto"):
     try:
-        seq_items = [{"name": m["name"], "core": m["core"], "shutdown": m["shutdown"], "repeats": m["repeats"]}
-                     for m in models]
-
+        seq_items = [{"name": m["name"], "core": m["core"], "shutdown": m["shutdown"], "repeats": m["repeats"]} for m in models]
         composite_gcode = compose_sequence(seq_items, change_block_final, mode)
         base = models[0]
         final_3mf = build_final_3mf(base["files"], base["plate_name"], composite_gcode)
-
         st.success("✅ Cola compuesta generada.")
-        st.balloons()
-        st.download_button(
-            "⬇️ Descargar 3MF compuesto",
-            data=final_3mf,
+        st.download_button("⬇️ Descargar 3MF compuesto", data=final_3mf,
             file_name=f"queue_{models[0]['name'].rsplit('.',1)[0]}.3mf",
-            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
-        )
-
-        st.code(
-            "Orden: " + ("Serie" if mode == "serial" else "Intercalado") + "\n" +
-            f"Espera antes de cambio: {'Sí' if wait_enabled else 'No'}"
-            + (f" ({wait_minutes:.1f} min)" if wait_enabled and wait_minutes > 0 else "") + "\n" +
-            "\n".join([f"- {m['name']}: x{m['repeats']}" for m in models]),
-            language="text"
-        )
-
-        st.markdown('<div class="footer">Hecho con ❤️ por PrintLooper</div>', unsafe_allow_html=True)
-
+            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml")
     except Exception as e:
         st.error(f"Error: {e}")
 
-# ====== Botón: generar 3MF de PRUEBA (solo movimientos) ======
+# ===== TEST: generar 3MF sin subir nada =====
 def build_test_core(safety_z: float, xy_speed: int) -> str:
-    """
-    G-code sintético SIN extrusión. Sirve para probar:
-    - homing, alturas seguras, movimientos XY
-    - espera de enfriado (se inserta fuera de este bloque)
-    - rutina de cambio (tu plantilla)
-    """
     return f"""\
 ; ===== PrintLooper TEST CORE (no imprime) =====
-G90                 ; coordenadas absolutas
-M104 S0             ; hotend off
-M106 S0             ; fan off
-G28                 ; homing
-G1 Z{safety_z:.2f} F1200    ; subir a altura segura
-; pequeño recorrido de verificación
+G90
+M104 S0
+M106 S0
+G28
+G1 Z{safety_z:.2f} F1200
 G1 X20 Y20 F{xy_speed}
 G1 X220 Y20 F{xy_speed}
 G1 X220 Y220 F{xy_speed}
 G1 X20 Y220 F{xy_speed}
 G1 X120 Y120 F{xy_speed}
-G4 S2               ; pausa corta
-; ===== fin test core =====
+G4 S2
 """
 
 def build_test_shutdown() -> str:
-    return """\
-; ===== PrintLooper TEST SHUTDOWN =====
-M104 S0
-M140 S0
-M106 S0
-M84
-"""
+    return "M104 S0\nM140 S0\nM106 S0\nM84\n"
 
 st.markdown("---")
 if st.button("🧪 Generar 3MF de prueba (solo movimientos)"):
     try:
-        # core de prueba + repeticiones + tu bloque de cambio (con espera previa)
         core_test = build_test_core(test_safety_z, int(test_xy_speed))
         shutdown_test = build_test_shutdown()
-
         seq_test = [{"name": "TEST", "core": core_test, "shutdown": shutdown_test, "repeats": int(test_repeats)}]
         composite_gcode = compose_sequence(seq_test, change_block_final, mode)
 
-        # usar el primer 3MF como esqueleto
-        base = models[0]
-        final_3mf = build_final_3mf(base["files"], base["plate_name"], composite_gcode)
+        # Esqueleto: usa el 1º subido si existe; si no, usa el mínimo
+        if uploads:
+            base_files = models[0]["files"]
+            plate_name = models[0]["plate_name"]
+        else:
+            base_files = minimal_3mf_skeleton()
+            plate_name = "Metadata/plate_1.gcode"
 
+        final_3mf = build_final_3mf(base_files, plate_name, composite_gcode)
         st.success("✅ 3MF de prueba generado.")
-        st.download_button(
-            "⬇️ Descargar 3MF de prueba",
-            data=final_3mf,
-            file_name="printlooper_test_moves.3mf",
-            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
-        )
-
-        st.code(
-            f"Test: x{test_repeats} | Zsegura={test_safety_z:.1f} mm | XY F={test_xy_speed} mm/min\n" +
-            f"Espera antes de cambio: {'Sí' if wait_enabled else 'No'}" +
-            (f" ({wait_minutes:.1f} min)" if wait_enabled and wait_minutes > 0 else ""),
-            language="text"
-        )
-
+        st.download_button("⬇️ Descargar 3MF de prueba",
+            data=final_3mf, file_name="printlooper_test_moves.3mf",
+            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml")
     except Exception as e:
         st.error(f"Error: {e}")
