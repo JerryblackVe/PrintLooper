@@ -20,29 +20,6 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 .card { border:1px solid #2a2f3a; border-radius:16px; padding:12px; background:#141821; }
 .small { opacity:.8; font-size:.9rem; }
 .footer { opacity:.7; font-size:.85rem; padding-top:1.2rem; border-top:1px dashed #2a2f3a; }
-
-/* ==== TIMELINE ==== */
-.timeline-wrap{margin:.6rem 0;}
-.timeline{
-  display:flex; gap:10px; overflow-x:auto; padding:10px;
-  background:#10141d; border:1px solid #2a2f3a; border-radius:14px;
-  scroll-snap-type: x mandatory;
-}
-.t-step{
-  min-width:230px; padding:12px; border-radius:12px; border:1px solid #2a2f3a;
-  box-shadow:0 6px 16px rgba(0,0,0,.15); scroll-snap-align:start;
-}
-.t-step .t-top{display:flex; align-items:center; gap:8px; font-weight:700; margin-bottom:6px;}
-.t-step .t-sub{opacity:.85; font-size:.9rem;}
-.t-print{ background:#1b2740;}
-.t-wait { background:#33270f;}
-.t-swap { background:#172415;}
-.t-print .t-top{color:#cfe4ff}
-.t-wait  .t-top{color:#ffe6b3}
-.t-swap  .t-top{color:#cde9c6}
-.t-arrow{align-self:center; opacity:.6; font-size:20px; padding:0 4px;}
-.timeline::-webkit-scrollbar{height:8px}
-.timeline::-webkit-scrollbar-thumb{background:#2a2f3a;border-radius:8px}
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,7 +63,7 @@ def minimal_3mf_skeleton() -> dict[str, bytes]:
         "Metadata/plate_1.gcode.md5": b"0\n",
     }
 
-# --- Secuencia: calculo de pasos
+# --- Secuencia: cálculo de pasos (lista)
 def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes, target_bed):
     steps = []
     total_prints = sum(m["repeats"] for m in models)
@@ -98,58 +75,35 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
             return step_index
         if wait_enabled:
             if wait_mode == "time":
-                steps.append({"#": step_index, "Acción": "Esperar", "Detalle": f"{wait_minutes:.1f} min", "Modelo": "-", "Repetición": "-"})
+                steps.append({"#": step_index, "Acción": "Esperar", "Detalle": f"{wait_minutes:.1f} min"})
                 step_index += 1
             else:
-                steps.append({"#": step_index, "Acción": "Esperar", "Detalle": f"Cama ≤ {int(target_bed)}°C", "Modelo": "-", "Repetición": "-"})
+                steps.append({"#": step_index, "Acción": "Esperar", "Detalle": f"Cama ≤ {int(target_bed)}°C"})
                 step_index += 1
-        steps.append({"#": step_index, "Acción": "Cambio de placa", "Detalle": "Rutina 'change plates'", "Modelo": "-", "Repetición": "-"})
+        steps.append({"#": step_index, "Acción": "Cambio de placa", "Detalle": "Rutina 'change plates'"})
         step_index += 1
         return step_index
 
-    idx = 1; printed = 0
+    idx = 1
+    printed = 0
+
     if mode == "serial":
         for m in models:
             for r in range(1, m["repeats"] + 1):
-                steps.append({"#": idx, "Acción": "Imprimir", "Detalle": "", "Modelo": m["name"], "Repetición": r})
-                idx += 1; printed += 1
+                steps.append({"#": idx, "Acción": "Imprimir", "Modelo": m["name"], "Repetición": r})
+                idx += 1
+                printed += 1
                 idx = add_wait_and_swap(idx, printed == total_prints)
     else:  # interleaved
         max_r = max(m["repeats"] for m in models)
         for r in range(1, max_r + 1):
             for m in models:
                 if r <= m["repeats"]:
-                    steps.append({"#": idx, "Acción": "Imprimir", "Detalle": "", "Modelo": m["name"], "Repetición": r})
-                    idx += 1; printed += 1
+                    steps.append({"#": idx, "Acción": "Imprimir", "Modelo": m["name"], "Repetición": r})
+                    idx += 1
+                    printed += 1
                     idx = add_wait_and_swap(idx, printed == total_prints)
     return steps
-
-# --- Secuencia: render gráfico (timeline)
-def render_sequence_timeline(steps:list):
-    if not steps:
-        return
-    def box_html(s):
-        if s["Acción"]=="Imprimir":
-            cls, icon, title = "t-print", "🖨️", "Imprimir"
-            sub = f"{s['Modelo']} — rep. {s['Repetición']}"
-        elif s["Acción"]=="Esperar":
-            cls, icon, title = "t-wait", "⏳", "Esperar"
-            sub = s["Detalle"]
-        else:
-            cls, icon, title = "t-swap", "🔁", "Cambio de placa"
-            sub = s["Detalle"]
-        return f"""
-        <div class="t-step {cls}">
-          <div class="t-top">{icon} {s['#']}. {title}</div>
-          <div class="t-sub">{sub}</div>
-        </div>"""
-    items = []
-    for i, s in enumerate(steps):
-        items.append(box_html(s))
-        if i < len(steps)-1:
-            items.append('<div class="t-arrow">➜</div>')
-    html = '<div class="timeline-wrap"><div class="timeline">' + "".join(items) + "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
 
 # ========== Header ==========
 c1, c2 = st.columns([0.22, 0.78])
@@ -248,9 +202,9 @@ if uploads:
             "shutdown": meta["shutdown"], "files": meta["files"],
         })
 
-# ========== Secuencia (previa) — TIMELINE ==========
+# ========== Secuencia (previa) — LISTA VISIBLE ==========
 if models:
-    st.markdown("### 🔄 Secuencia de impresión (previa)")
+    st.markdown("### 🔄 Secuencia de impresión")
     preview_steps = compute_sequence_preview(
         models=models,
         mode=mode,
@@ -260,19 +214,17 @@ if models:
         target_bed=target_bed
     )
     total_prints = sum(m["repeats"] for m in models)
-    total_swaps  = sum(1 for s in preview_steps if s["Acción"]=="Cambio de placa")
-    total_waits  = sum(1 for s in preview_steps if s["Acción"]=="Esperar")
+    total_swaps  = sum(1 for s in preview_steps if s["Acción"] == "Cambio de placa")
+    total_waits  = sum(1 for s in preview_steps if s["Acción"] == "Esperar")
     st.caption(f"Impresiones: {total_prints} • Esperas: {total_waits} • Cambios: {total_swaps}")
-    render_sequence_timeline(preview_steps)
 
-    with st.expander("Ver detalle en lista"):
-        for s in preview_steps:
-            if s["Acción"]=="Imprimir":
-                st.write(f"{s['#']}. 🖨️ {s['Modelo']} — rep. {s['Repetición']}")
-            elif s["Acción"]=="Esperar":
-                st.write(f"{s['#']}. ⏳ Esperar {s['Detalle']}")
-            else:
-                st.write(f"{s['#']}. 🔁 {s['Detalle']}")
+    for s in preview_steps:
+        if s["Acción"] == "Imprimir":
+            st.write(f"{s['#']}. 🖨️ {s['Modelo']} — repetición {s['Repetición']}")
+        elif s["Acción"] == "Esperar":
+            st.write(f"{s['#']}. ⏳ Esperar {s['Detalle']}")
+        else:
+            st.write(f"{s['#']}. 🔁 {s['Detalle']}")
 
 st.markdown("---")
 
