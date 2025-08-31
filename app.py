@@ -20,7 +20,9 @@ h1, h2, h3 { background: linear-gradient(90deg,#e6e6e6,#8AE234);
 .card { border:1px solid #2a2f3a; border-radius:16px; padding:12px; background:#141821; }
 .small { opacity:.8; font-size:.9rem; }
 .footer { opacity:.7; font-size:.85rem; padding-top:1.2rem; border-top:1px dashed #2a2f3a; }
-.seq-card { border:1px solid #2a2f3a; border-radius:14px; padding:12px; background:#10141d; }
+
+/* mini estilos para la secuencia */
+.seq-card { border:1px solid #2a2f3a; border-radius:14px; padding:12px; background:#10141d; margin:8px 0; }
 .seq-badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; margin-right:6px; }
 .seq-print { background:#22304a; color:#cfe4ff; }
 .seq-wait  { background:#3a2e15; color:#ffe6b3; }
@@ -68,9 +70,8 @@ def minimal_3mf_skeleton() -> dict[str, bytes]:
         "Metadata/plate_1.gcode.md5": b"0\n",
     }
 
-# ---- NEW: construir previsualización de secuencia
+# === SECUENCIA === helper: construir la vista previa de pasos
 def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes, target_bed):
-    """Devuelve una lista de pasos [{'#':1,'Acción':'Imprimir','Modelo':'X',...}, ...]"""
     steps = []
     total_prints = sum(m["repeats"] for m in models)
     if total_prints == 0:
@@ -109,7 +110,6 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
                     idx += 1
                     printed += 1
                     idx = add_wait_and_swap(idx, printed == total_prints)
-
     return steps
 
 # ========== Header ==========
@@ -209,7 +209,7 @@ if uploads:
             "shutdown": meta["shutdown"], "files": meta["files"],
         })
 
-# ========== NUEVO: vista previa de la SECUENCIA ==========
+# === SECUENCIA === sección visible
 if models:
     st.markdown("### Secuencia de impresión (previa)")
     preview_steps = compute_sequence_preview(
@@ -220,11 +220,10 @@ if models:
         wait_minutes=wait_minutes,
         target_bed=target_bed
     )
-
-    # Resumen
     total_prints = sum(m["repeats"] for m in models)
-    total_swaps  = max(0, len([s for s in preview_steps if s["Acción"] == "Cambio de placa"]))
-    total_waits  = len([s for s in preview_steps if s["Acción"] == "Esperar"])
+    total_swaps  = sum(1 for s in preview_steps if s["Acción"] == "Cambio de placa")
+    total_waits  = sum(1 for s in preview_steps if s["Acción"] == "Esperar")
+
     st.markdown(
         f"<div class='seq-card'>"
         f"<span class='seq-badge seq-print'>Impresiones: {total_prints}</span>"
@@ -232,8 +231,6 @@ if models:
         f"<span class='seq-badge seq-swap'>Cambios de placa: {total_swaps}</span>"
         f"</div>", unsafe_allow_html=True
     )
-
-    # Listado
     for step in preview_steps:
         if step["Acción"] == "Imprimir":
             badge = "<span class='seq-badge seq-print'>Imprimir</span>"
@@ -245,6 +242,8 @@ if models:
             badge = "<span class='seq-badge seq-swap'>Cambio</span>"
             txt = f"{badge} {step['Detalle']}"
         st.markdown(f"{step['#']}. {txt}", unsafe_allow_html=True)
+
+st.markdown("---")
 
 # ========== Build change block (with optional wait) ==========
 cycle_block = rebuild_cycles(cycles, down_mm, up_mm, None, None)
