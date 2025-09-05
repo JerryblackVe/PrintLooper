@@ -81,44 +81,45 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
 
 # ========== BLOQUE DE CAMBIO (FIJO, SIN CICLOS) ==========
 CHANGE_BLOCK_FIXED = """;======== Starting custom sequence =================          ; Bloque inicial personalizado
-; Home all axes                                               ; Comentario descriptivo
-G28 ;                                                         ; Home de todos los ejes (X/Y/Z)
-
-; Subir Z a 250 mm                                            ; Comentario descriptivo
-G90 ; modo absoluto                                           ; Pone el modo de posicionamiento en absoluto
-G1 Z250 F3000 ;                                               ; Sube el eje Z hasta 250 mm a 3000 mm/min
+; Subir Z a 255 mm desde el punto donde terminó la impresión
+G90                         ; Modo absoluto
+G1 Z255 F1500               ; Sube Z hasta 255 mm a 1500 mm/min
 
 ;======== Starting to change plates =================         ; Inicio de la secuencia de cambio de placas
-G91 ;                                                         ; Modo relativo (movimientos referidos a la posición actual)
-; {{CYCLES}}                                                  ; (ELIMINADO) No se ejecutan ciclos Z
-G1 Z5 F1200                                                   ; Eleva Z 5 mm a 1200 mm/min (clearance)
-G90 ;                                                         ; Vuelve a modo absoluto
-G28 Y ;                                                       ; Home solo del eje Y
-G91 ;                                                         ; Cambia a modo relativo
-G380 S2 Z30 F1200                                             ; Probing/movimiento Z especial (según firmware) S2, distancia 30, F1200
-G90 ;                                                         ; Vuelve a modo absoluto
-M211 Y0 Z0 ;                                                  ; (Dependiendo del firmware) desactiva límites suaves en Y y Z
-G91 ;                                                         ; Modo relativo
-G90 ;                                                         ; Vuelve a modo absoluto
+G91                         ; Modo relativo
+; {{CYCLES}}                ; (ELIMINADO: no se usan ciclos automáticos)
+G1 Z5 F1200                 ; Eleva Z 5 mm extra de seguridad
+G90                         ; Vuelve a modo absoluto
 
-G1 Y250 F2000 ;                                               ; Mueve a Y=250 a 2000 mm/min
-G1 Y266 F500                                                  ; Mueve a Y=266 a 500 mm/min (más lento para precisión)
-G1 Z260 F500                                                  ; Ajuste Z (si se requiere)
-G1 Y35 F1000                                                  ; Mueve a Y=35 a 1000 mm/min
-G1 Y0 F2500                                                   ; Mueve a Y=0 a 2500 mm/min (rápido)
-G91 ;                                                         ; Modo relativo
-G380 S3 Z-15 F1200                                            ; Movimiento/probing Z hacia abajo 15 mm (S3)
-G90 ;                                                         ; Modo absoluto
+G28 Y                       ; Home solo del eje Y
+G91                         ; Modo relativo
+G380 S2 Z30 F1200           ; Movimiento/probing Z especial (según firmware)
+G90                         ; Vuelve a modo absoluto
+M211 Y0 Z0                  ; (Opcional) desactiva límites suaves en Y/Z
+G91                         ; Modo relativo
+G90                         ; Vuelve a modo absoluto
 
-G1 Y266 F2000                                                 ; Mueve a Y=266 a 2000 mm/min
-G1 Y53 F2000                                                  ; Mueve a Y=53 a 2000 mm/min
-G1 Y100 F2000                                                 ; Mueve a Y=100 a 2000 mm/min
-G1 Y266 F2000                                                 ; Mueve a Y=266 a 2000 mm/min
-G1 Y10 F1000                                                  ; Mueve a Y=10 a 1000 mm/min
-G1 Y1 F500                                                    ; Mueve a Y=1 a 500 mm/min
-G1 Y150 F1000                                                 ; Mueve a Y=150 a 1000 mm/min
-G28 Y ;                                                       ; Home del eje Y nuevamente
+; ----- Secuencia de expulsión en Y -----
+G1 Y250 F2000
+G1 Y266 F500
+G1 Z260 F500                ; Ajusta Z a 260 mm durante el ciclo
+G1 Y35 F1000
+G1 Y0 F2500
+G91
+G380 S3 Z-15 F1200          ; Baja Z 15 mm (proceso de expulsión)
+G90
+
+G1 Y266 F2000
+G1 Y53 F2000
+G1 Y100 F2000
+G1 Y266 F2000
+G1 Y10 F1000
+G1 Y1 F500
+G1 Y150 F1000
+G28 Y                       ; Home del eje Y nuevamente
+
 ;======== Finish to change plates =================           ; Fin de la secuencia de cambio de placas
+
 
 """
 
