@@ -120,8 +120,6 @@ G1 Y150 F1000                                                 ; Mueve a Y=150 a 
 G28 Y ;                                                       ; Home del eje Y nuevamente
 ;======== Finish to change plates =================           ; Fin de la secuencia de cambio de placas
 
-; Apagar motores                                              ; Comentario descriptivo
-M84 ;                                                         ; Deshabilita (libera) todos los motores
 """
 
 # ========== Header ==========
