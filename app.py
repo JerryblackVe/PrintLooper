@@ -1,7 +1,6 @@
 # app.py
 import io, zipfile, re, hashlib
 import streamlit as st
-from core.gcode_loop import rebuild_cycles, DEFAULT_CHANGE_TEMPLATE
 from core.queue_builder import read_3mf, compose_sequence, build_final_3mf
 
 APP_NAME  = "PrintLooper — Auto Swap for 3MF"
@@ -38,31 +37,6 @@ def select_preview_from_files(files: dict, plate_name: str) -> bytes | None:
             return files[ok]
     return None
 
-def minimal_3mf_skeleton() -> dict[str, bytes]:
-    content_types = b"""<?xml version="1.0" encoding="UTF-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>
-  <Default Extension="png" ContentType="image/png"/>
-  <Default Extension="gcode" ContentType="text/plain"/>
-  <Default Extension="md5" ContentType="text/plain"/>
-</Types>"""
-    rels = b"""<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>
-</Relationships>"""
-    model = b"""<?xml version="1.0" encoding="UTF-8"?>
-<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
-  <resources/><build/>
-</model>"""
-    return {
-        "[Content_Types].xml": content_types,
-        "_rels/.rels": rels,
-        "3D/3dmodel.model": model,
-        "Metadata/plate_1.gcode": b"; PrintLooper minimal placeholder\n",
-        "Metadata/plate_1.gcode.md5": b"0\n",
-    }
-
 # --- Secuencia: cálculo de pasos (lista)
 def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes, target_bed):
     steps = []
@@ -80,7 +54,7 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
             else:
                 steps.append({"#": step_index, "Acción": "Esperar", "Detalle": f"Cama ≤ {int(target_bed)}°C"})
                 step_index += 1
-        steps.append({"#": step_index, "Acción": "Cambio de placa", "Detalle": "Rutina 'change plates'"})
+        steps.append({"#": step_index, "Acción": "Cambio de placa", "Detalle": "Bloque G-code fijo"})
         step_index += 1
         return step_index
 
@@ -105,6 +79,51 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
                     idx = add_wait_and_swap(idx, printed == total_prints)
     return steps
 
+# ========== BLOQUE DE CAMBIO (FIJO, SIN CICLOS) ==========
+CHANGE_BLOCK_FIXED = """;======== Starting custom sequence =================          ; Bloque inicial personalizado
+; Home all axes                                               ; Comentario descriptivo
+G28 ;                                                         ; Home de todos los ejes (X/Y/Z)
+
+; Subir Z a 250 mm                                            ; Comentario descriptivo
+G90 ; modo absoluto                                           ; Pone el modo de posicionamiento en absoluto
+G1 Z250 F3000 ;                                               ; Sube el eje Z hasta 250 mm a 3000 mm/min
+
+;======== Starting to change plates =================         ; Inicio de la secuencia de cambio de placas
+G91 ;                                                         ; Modo relativo (movimientos referidos a la posición actual)
+; {{CYCLES}}                                                  ; (ELIMINADO) No se ejecutan ciclos Z
+G1 Z5 F1200                                                   ; Eleva Z 5 mm a 1200 mm/min (clearance)
+G90 ;                                                         ; Vuelve a modo absoluto
+G28 Y ;                                                       ; Home solo del eje Y
+G91 ;                                                         ; Cambia a modo relativo
+G380 S2 Z30 F1200                                             ; Probing/movimiento Z especial (según firmware) S2, distancia 30, F1200
+G90 ;                                                         ; Vuelve a modo absoluto
+M211 Y0 Z0 ;                                                  ; (Dependiendo del firmware) desactiva límites suaves en Y y Z
+G91 ;                                                         ; Modo relativo
+G90 ;                                                         ; Vuelve a modo absoluto
+
+G1 Y250 F2000 ;                                               ; Mueve a Y=250 a 2000 mm/min
+G1 Y266 F500                                                  ; Mueve a Y=266 a 500 mm/min (más lento para precisión)
+G1 Z260 F500                                                  ; Ajuste Z (si se requiere)
+G1 Y35 F1000                                                  ; Mueve a Y=35 a 1000 mm/min
+G1 Y0 F2500                                                   ; Mueve a Y=0 a 2500 mm/min (rápido)
+G91 ;                                                         ; Modo relativo
+G380 S3 Z-15 F1200                                            ; Movimiento/probing Z hacia abajo 15 mm (S3)
+G90 ;                                                         ; Modo absoluto
+
+G1 Y266 F2000                                                 ; Mueve a Y=266 a 2000 mm/min
+G1 Y53 F2000                                                  ; Mueve a Y=53 a 2000 mm/min
+G1 Y100 F2000                                                 ; Mueve a Y=100 a 2000 mm/min
+G1 Y266 F2000                                                 ; Mueve a Y=266 a 2000 mm/min
+G1 Y10 F1000                                                  ; Mueve a Y=10 a 1000 mm/min
+G1 Y1 F500                                                    ; Mueve a Y=1 a 500 mm/min
+G1 Y150 F1000                                                 ; Mueve a Y=150 a 1000 mm/min
+G28 Y ;                                                       ; Home del eje Y nuevamente
+;======== Finish to change plates =================           ; Fin de la secuencia de cambio de placas
+
+; Apagar motores                                              ; Comentario descriptivo
+M84 ;                                                         ; Deshabilita (libera) todos los motores
+"""
+
 # ========== Header ==========
 c1, c2 = st.columns([0.22, 0.78])
 with c1:
@@ -116,61 +135,38 @@ with c2:
 
 # ========== Sidebar ==========
 with st.sidebar:
-    st.markdown("### Parámetros globales")
-
-    cycles  = st.number_input(
-        "Ciclos Z (por cambio)", min_value=0, value=5, step=1,
-        help="Número de pares de movimientos Z (bajar/subir) ejecutados durante el ciclo de expulsión."
-    )
-    down_mm = st.number_input(
-        "Descenso Z (mm)", min_value=1.0, value=20.0, step=0.5, format="%.1f",
-        help="Cuánto baja el eje Z durante el ciclo de expulsión."
-    )
-    up_mm   = st.number_input(
-        "Ascenso Z (mm)", min_value=1.0, value=75.0, step=0.5, format="%.1f",
-        help="Cuánto sube el eje Z para despejar la pieza y evitar colisiones."
-    )
-    mode    = st.radio(
+    st.markdown("### Parámetros")
+    mode = st.radio(
         "Orden de impresión", ["serial","interleaved"],
         format_func=lambda x: "Serie" if x=="serial" else "Intercalado",
         help="Serie: imprime todas las repeticiones de un modelo y luego el siguiente. Intercalado: alterna modelos por turno."
     )
-    use_tpl = st.checkbox(
-        "Usar plantilla custom", value=True,
-        help="Si está activo, se usa la plantilla editable de cambio de placa. Si no, se usará la plantilla por defecto."
-    )
 
     st.markdown("---")
     st.markdown("### Espera antes del cambio de placa")
-
     wait_enabled = st.checkbox(
         "Activar espera", value=False,
         help="Si se activa, la impresora esperará antes de iniciar el cambio de placa (por tiempo o por temperatura)."
     )
-
     wait_mode = st.radio(
         "Modo de espera", ["time", "temp"],
         format_func=lambda v: "Por tiempo (min)" if v=="time" else "Por temperatura (cama ≤ °C)",
         horizontal=True, disabled=not wait_enabled,
-        help="Tiempo: pausa fija en minutos (G4). Temperatura: espera a que la cama alcance la temperatura objetivo (M140 S0 + M190 R)."
+        help="Tiempo: pausa fija (G4). Temperatura: espera a que la cama alcance la temperatura objetivo (M140 S0 + M190 R)."
     )
-
     wait_minutes = st.number_input(
         "Minutos de espera", min_value=0.0, value=2.0, step=0.5, format="%.1f",
         disabled=(not wait_enabled or wait_mode!="time"),
         help="Duración de la pausa antes del cambio. Se apaga la cama (M140 S0) y se espera G4 S<segundos>."
     )
     target_bed = st.number_input(
-        "Temperatura objetivo de cama (°C)", min_value=0, max_value=120, value=35, step=1,
+        "Temperatura objetivo de cama (°C)", min_value=0, max_value=120, value=48, step=1,
         disabled=(not wait_enabled or wait_mode!="temp"),
         help="Temperatura de cama a la que debe enfriar antes del cambio. Se usa M140 S0 + M190 R<temp>."
     )
 
-with st.expander("Plantilla de 'change plates'"):
-    tpl = st.text_area(
-        "Plantilla {{CYCLES}}", value=DEFAULT_CHANGE_TEMPLATE, height=220,
-        help="Podés usar {{CYCLES}} donde quieras inyectar los ciclos Z. Si no lo usás, se insertan tras la segunda línea."
-    )
+with st.expander("Bloque G-code fijo que se insertará entre repeticiones"):
+    st.code(CHANGE_BLOCK_FIXED, language="gcode")
 
 uploads = st.file_uploader(
     "Subí uno o más .3mf", type=["3mf"], accept_multiple_files=True,
@@ -193,7 +189,7 @@ if uploads:
                      use_container_width=True)
             reps = st.number_input(
                 "Repeticiones", min_value=1, value=1, step=1, key=f"reps_{i}",
-                help="Cantidad de veces que se imprimirá este modelo dentro de la cola."
+                help="Cuántas veces se imprimirá este modelo dentro de la cola."
             )
             st.markdown('</div>', unsafe_allow_html=True)
         models.append({
@@ -220,7 +216,7 @@ if models:
 
     for s in preview_steps:
         if s["Acción"] == "Imprimir":
-            st.write(f"{s['#']}. 🖨️ {s['Modelo']} — repetición {s['Repetición']}")
+            st.write(f"{s['#']}. 🖨️ {s.get('Modelo','-')} — repetición {s.get('Repetición','-')}")
         elif s["Acción"] == "Esperar":
             st.write(f"{s['#']}. ⏳ Esperar {s['Detalle']}")
         else:
@@ -228,10 +224,7 @@ if models:
 
 st.markdown("---")
 
-# ========== Build change block (with optional wait) ==========
-cycle_block = rebuild_cycles(cycles, down_mm, up_mm, None, None)
-change_block = (tpl if use_tpl else DEFAULT_CHANGE_TEMPLATE).replace("{{CYCLES}}", cycle_block)
-
+# ========== Construcción del bloque de cambio (pre-wait + fijo) ==========
 pre_wait_block = ""
 if wait_enabled:
     if wait_mode == "time" and wait_minutes > 0:
@@ -248,10 +241,10 @@ if wait_enabled:
             f"M190 R{int(target_bed)}\n"
         )
 
-change_block_final = pre_wait_block + change_block
+change_block_final = pre_wait_block + CHANGE_BLOCK_FIXED
 
-# ========== Generate normal queue ==========
-if uploads and st.button("Generar 3MF compuesto", help="Construye un único .3mf con todos los modelos y sus repeticiones, insertando el bloque de cambio entre cada impresión."):
+# ========== Generar 3MF compuesto ==========
+if uploads and st.button("Generar 3MF compuesto", help="Construye un único .3mf con todos los modelos y sus repeticiones, insertando el bloque G-code fijo entre cada impresión."):
     try:
         seq_items = [{"name": m["name"], "core": m["core"], "shutdown": m["shutdown"], "repeats": m["repeats"]}
                      for m in models]
@@ -263,69 +256,6 @@ if uploads and st.button("Generar 3MF compuesto", help="Construye un único .3mf
         st.download_button(
             "⬇️ Descargar 3MF compuesto", data=final_3mf,
             file_name=f"queue_{models[0]['name'].rsplit('.',1)[0]}.3mf",
-            mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
-        )
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# ========== Test mode (moves only) ==========
-def build_test_core(safety_z: float, xy_speed: int) -> str:
-    return f"""\
-; ===== PrintLooper TEST CORE (no imprime) =====
-G90
-M104 S0
-M106 S0
-G28
-G1 Z{safety_z:.2f} F1200
-G1 X20 Y20 F{xy_speed}
-G1 X220 Y20 F{xy_speed}
-G1 X220 Y220 F{xy_speed}
-G1 X20 Y220 F{xy_speed}
-G1 X120 Y120 F{xy_speed}
-G4 S2
-"""
-
-def build_test_shutdown() -> str:
-    return "M104 S0\nM140 S0\nM106 S0\nM84\n"
-
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### Modo prueba (solo movimientos)")
-    test_repeats = st.number_input(
-        "Repeticiones de prueba", min_value=1, value=3, step=1,
-        help="Cuántas veces repetir el bucle de prueba."
-    )
-    test_safety_z = st.number_input(
-        "Altura segura Z (mm)", min_value=1.0, value=10.0, step=1.0, format="%.1f",
-        help="Altura a la que se mueve Z para evitar colisiones."
-    )
-    test_xy_speed = st.number_input(
-        "Velocidad XY (mm/min)", min_value=100, value=6000, step=100,
-        help="Velocidad de los movimientos XY del test."
-    )
-
-st.markdown("---")
-if st.button("🧪 Generar 3MF de prueba (solo movimientos)", help="Crea un .3mf de test sin extrusión para validar tiempos, espera y rutina de cambio."):
-    try:
-        core_test = build_test_core(test_safety_z, int(test_xy_speed))
-        shutdown_test = build_test_shutdown()
-        seq_test = [{"name": "TEST", "core": core_test, "shutdown": shutdown_test, "repeats": int(test_repeats)}]
-        composite_gcode = compose_sequence(seq_test, change_block_final, mode)
-
-        if uploads:
-            base_files = models[0]["files"]
-            plate_name = models[0]["plate_name"]
-        else:
-            base_files = minimal_3mf_skeleton()
-            plate_name = "Metadata/plate_1.gcode"
-
-        final_3mf = build_final_3mf(base_files, plate_name, composite_gcode)
-
-        st.success("✅ 3MF de prueba generado.")
-        st.download_button(
-            "⬇️ Descargar 3MF de prueba",
-            data=final_3mf,
-            file_name="printlooper_test_moves.3mf",
             mime="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"
         )
     except Exception as e:
