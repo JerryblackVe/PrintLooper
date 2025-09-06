@@ -103,6 +103,7 @@ G90                         ; Vuelve a modo absoluto
 G1 Y250 F2000
 G1 Y266 F500
 G1 Z260 F500                ; Ajusta Z a 260 mm durante el ciclo
+G1 Y150 F500
 G1 Y35 F1000
 G1 Y0 F2500
 G91
@@ -110,13 +111,14 @@ G380 S3 Z-15 F1200          ; Baja Z 15 mm (proceso de expulsión)
 G90
 
 G1 Y266 F2000
-G1 Y53 F2000
+G1 Y53  F2000
 G1 Y100 F2000
 G1 Y266 F2000
-G1 Y10 F1000
-G1 Y1 F500
+G1 Y250 F8000
+G1 Y266 F8000
+G1 Y0   F1000
 G1 Y150 F1000
-G28 Y                       ; Home del eje Y nuevamente
+G28 Y           
 
 ;======== Finish to change plates =================           ; Fin de la secuencia de cambio de placas
 
