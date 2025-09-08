@@ -107,7 +107,7 @@ G1 Y150 F500
 G1 Y35 F1000
 G1 Y0 F2500
 G91
-G380 S3 Z-15 F1200          ; Baja Z 15 mm (proceso de expulsión)
+G380 S3 Z0 F1200          ; Baja Z 15 mm (proceso de expulsión)
 G90
 
 G1 Y266 F2000
