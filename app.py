@@ -84,14 +84,9 @@ CHANGE_BLOCK_FIXED = """;======== Starting custom sequence =================    
 
 ;======== Starting to change plates =================         ; Inicio de la secuencia de cambio de placas
 G91; 
- G380 S3 Z-20 F1200 
- G380 S2 Z60 F1200 
- G380 S3 Z-20 F1200 
- G380 S2 Z60 F1200 
- G380 S3 Z-20 F1200 
- G380 S2 Z60 F1200 
- G380 S3 Z-20 F1200 
- G380 S2 Z60 F1200 
+  
+
+ G380 S2 Z266 F1200 
 
 
 G90                         ; Vuelve a modo absoluto
