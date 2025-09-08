@@ -81,14 +81,19 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
 
 # ========== BLOQUE DE CAMBIO (FIJO, SIN CICLOS) ==========
 CHANGE_BLOCK_FIXED = """;======== Starting custom sequence =================          ; Bloque inicial personalizado
-; Subir Z a 255 mm desde el punto donde terminó la impresión
-G90                         ; Modo absoluto
-G1 Z255 F1500               ; Sube Z hasta 255 mm a 1500 mm/min
 
 ;======== Starting to change plates =================         ; Inicio de la secuencia de cambio de placas
-G91                         ; Modo relativo
-; {{CYCLES}}                ; (ELIMINADO: no se usan ciclos automáticos)
-G1 Z5 F1200                 ; Eleva Z 5 mm extra de seguridad
+G91; 
+ G380 S3 Z-20 F1200 
+ G380 S2 Z60 F1200 
+ G380 S3 Z-20 F1200 
+ G380 S2 Z60 F1200 
+ G380 S3 Z-20 F1200 
+ G380 S2 Z60 F1200 
+ G380 S3 Z-20 F1200 
+ G380 S2 Z60 F1200 
+
+
 G90                         ; Vuelve a modo absoluto
 
 G28 Y                       ; Home solo del eje Y
