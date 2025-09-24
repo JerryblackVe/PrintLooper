@@ -118,6 +118,7 @@ G1 Y250 F8000
 G1 Y266 F8000
 G1 Y0   F1000
 G1 Y150 F1000
+G1 Z100 F1000
 G28 Y           
 
 ;======== Finish to change plates =================           ; Fin de la secuencia de cambio de placas
