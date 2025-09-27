@@ -83,10 +83,10 @@ def compute_sequence_preview(models, mode, wait_enabled, wait_mode, wait_minutes
 CHANGE_BLOCK_FIXED = """;======== Starting custom sequence =================          ; Bloque inicial personalizado
 
 ;======== Starting to change plates =================         ; Inicio de la secuencia de cambio de placas
-G91; 
+                              ;G91; 
   
 
- G380 S2 Z266 F1200 
+                            ; G380 S2 Z266 F1200 
 
 
 G90                         ; Vuelve a modo absoluto
